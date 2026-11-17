@@ -650,3 +650,209 @@ quiz:[
     { q: "다른 세션이 UPDATE 중(미커밋)인 행을 SELECT하면?", o: ["커밋될 때까지 기다린다", "Undo로 만든 커밋된 예전 값을 바로 읽는다", "ORA-00054 에러", "미커밋 값을 읽는다"], a: 1, e: "읽기 일관성 덕분에 SELECT는 기다리지 않고, Undo로 쿼리 시작 시점의 커밋된 값을 만들어 읽습니다." }
   ]);
 })();
+
+/* ───────── v0.0.8 노선별 레슨 보강 (19c 문서·MOS 기준) ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var X = "https://docs.oracle.com/en/engineered-systems/exadata-database-machine/";
+  function cat(id) { return window.DBBIG_CONTENT.filter(function (c) { return c.id === id; })[0]; }
+  var MORE = {
+space: { lessons: [
+{ id:"space-5", title:"큰 세그먼트·리사이클빈 찾기", min:5, body:[
+ ["p","테이블스페이스가 갑자기 찼다면 '무엇이 공간을 먹었나'부터 찾습니다. 세그먼트는 테이블·인덱스·LOB·파티션처럼 실제 공간을 차지하는 단위입니다."],
+ ["code","sql","-- 테이블스페이스별 상위 20개 세그먼트\nSELECT owner, segment_name, partition_name, segment_type,\n       ROUND(bytes/1024/1024/1024,2) AS gb\nFROM   dba_segments\nWHERE  tablespace_name = 'USERS'\nORDER  BY bytes DESC\nFETCH FIRST 20 ROWS ONLY;\n\n-- LOB 세그먼트(SYS_LOB...)가 어느 테이블·컬럼 것인지\nSELECT owner, table_name, column_name, segment_name\nFROM   dba_lobs\nWHERE  segment_name = '&lob_segment';"],
+ ["p","**리사이클빈**: DROP TABLE한 테이블은 기본적으로 바로 지워지지 않고 BIN$로 시작하는 이름으로 리사이클빈에 들어갑니다(RECYCLEBIN 파라미터 기본 ON). FLASHBACK TABLE ... TO BEFORE DROP으로 되살릴 수 있는 대신, 비우기 전까지 공간을 계속 차지합니다. 테이블스페이스 공간이 모자라면 오라클이 리사이클빈의 오래된 객체부터 자동으로 비우기도 합니다."],
+ ["code","sql","SELECT owner, original_name, type, droptime, space\nFROM   dba_recyclebin ORDER BY droptime;\n\n-- 되살리기\nFLASHBACK TABLE app.orders TO BEFORE DROP;\n\n-- 비우기 (내 것 / 특정 테이블스페이스 / 전체 — 전체는 SYSDBA)\nPURGE RECYCLEBIN;\nPURGE TABLESPACE users USER app;\nPURGE DBA_RECYCLEBIN;"],
+ ["warn","PURGE 후에는 FLASHBACK TABLE로 되살릴 수 없습니다. 운영계에서 DBA_RECYCLEBIN 전체를 비우기 전에는 최근에 실수로 지운 테이블이 없는지 담당자와 확인하세요."]
+]}],
+  quiz: [
+ { q: "DROP TABLE 후 FLASHBACK TABLE ... TO BEFORE DROP으로 되살릴 수 있는 이유는?", o: ["Undo에 테이블이 남아서", "리사이클빈에 BIN$ 이름으로 남아서", "아카이브 로그에서 복원해서", "Data Pump 자동 백업 때문에"], a: 1, e: "RECYCLEBIN이 ON(기본)이면 DROP한 테이블은 BIN$ 이름으로 리사이클빈에 남고, PURGE하기 전까지 되살릴 수 있습니다." },
+ { q: "SYS_LOB으로 시작하는 큰 세그먼트의 원래 테이블·컬럼을 찾는 뷰는?", o: ["DBA_LOBS", "DBA_INDEXES", "DBA_TAB_COLUMNS", "DBA_EXTENTS"], a: 0, e: "DBA_LOBS의 SEGMENT_NAME으로 소유 테이블과 컬럼을 찾을 수 있습니다." }
+]},
+rman: { lessons: [
+{ id:"rman-5", title:"백업 검증과 정리 운영", min:5, body:[
+ ["p","백업은 '있는 것'보다 '복구할 수 있는 것'이 중요합니다. 실제 복원 없이 백업이 쓸 만한지 확인하는 명령을 정기 점검에 넣어 두세요."],
+ ["code","rman","rman target /\n\n# 복원에 필요한 백업이 모두 있고 읽을 수 있는지 (실제 복원 안 함)\nRESTORE DATABASE VALIDATE;\nRESTORE ARCHIVELOG ALL VALIDATE;\n\n# 데이터파일의 물리·논리 손상 검사 (백업 파일은 안 만듦)\nBACKUP VALIDATE CHECK LOGICAL DATABASE ARCHIVELOG ALL;\n\n# 현황 보고\nLIST BACKUP SUMMARY;\nREPORT NEED BACKUP;\nREPORT OBSOLETE;"],
+ ["code","sql","-- VALIDATE가 찾아낸 손상 블록\nSELECT * FROM v$database_block_corruption;"],
+ ["p","**정리 순서**: CROSSCHECK로 카탈로그와 실제 파일을 맞추고 → 사라진 파일(EXPIRED) 기록을 지우고 → 보존정책상 필요 없는(OBSOLETE) 백업을 지웁니다."],
+ ["code","rman","CROSSCHECK BACKUP;\nCROSSCHECK ARCHIVELOG ALL;\nDELETE NOPROMPT EXPIRED BACKUP;\nDELETE NOPROMPT EXPIRED ARCHIVELOG ALL;\nDELETE NOPROMPT OBSOLETE;"],
+ ["tip","Data Guard 환경이라면 Primary에서 CONFIGURE ARCHIVELOG DELETION POLICY TO APPLIED ON ALL STANDBY;를 설정해 두세요. Standby에 아직 적용되지 않은 아카이브를 RMAN이 지우지 않습니다."]
+]},
+{ id:"rman-6", title:"Flashback Database와 보장 복원 지점", min:5, body:[
+ ["p","Flashback Database는 DB 전체를 과거 시점으로 '되감는' 기능입니다. 백업에서 복원하는 것보다 훨씬 빠릅니다. FRA에 Flashback 로그를 남기는 방식이라 FRA가 꼭 필요합니다."],
+ ["code","sql","-- 상태 확인 / 켜기 (19c는 OPEN 상태에서도 가능)\nSELECT flashback_on FROM v$database;\nALTER SYSTEM SET db_flashback_retention_target = 1440 SCOPE=BOTH;  -- 분 단위, 기본 1440(하루)\nALTER DATABASE FLASHBACK ON;"],
+ ["p","**패치·업그레이드 전 보장 복원 지점(Guaranteed Restore Point)** — 작업 전에 만들어 두면 작업이 잘못됐을 때 그 시점으로 되돌릴 수 있습니다. Flashback Database를 켜지 않아도 만들 수 있습니다."],
+ ["code","sql","-- 작업 전\nCREATE RESTORE POINT before_ru GUARANTEE FLASHBACK DATABASE;\nSELECT name, guarantee_flashback_database, storage_size FROM v$restore_point;\n\n-- 되돌려야 할 때 (단일 인스턴스 예, RAC는 모든 인스턴스 종료 후 한 노드에서)\nSHUTDOWN IMMEDIATE;\nSTARTUP MOUNT;\nFLASHBACK DATABASE TO RESTORE POINT before_ru;\nALTER DATABASE OPEN RESETLOGS;\n\n-- 작업이 잘 끝났으면 반드시 삭제\nDROP RESTORE POINT before_ru;"],
+ ["warn","보장 복원 지점은 지울 때까지 Flashback 로그를 계속 쌓습니다. 잊고 두면 FRA가 가득 차서 아카이브가 멈추고(ORA-00257) DB가 멈춥니다. 작업 계획서에 'DROP RESTORE POINT' 단계를 꼭 넣으세요."],
+ ["tip","Flashback Database로는 바이너리(ORACLE_HOME) 변경은 되돌릴 수 없습니다. RU 롤백이라면 바이너리 롤백(opatch rollback 또는 out-of-place 홈 전환)과 함께 계획해야 합니다."]
+]}],
+  quiz: [
+ { q: "백업을 실제로 복원하지 않고 복원 가능 여부만 확인하는 RMAN 명령은?", o: ["RESTORE DATABASE VALIDATE;", "BACKUP DATABASE;", "REPORT SCHEMA;", "CROSSCHECK COPY;"], a: 0, e: "RESTORE ... VALIDATE는 필요한 백업을 찾아 읽어 보기만 하고 파일을 복원하지 않습니다." },
+ { q: "보장 복원 지점(GRP)을 지우지 않고 오래 두면 생기는 대표적인 문제는?", o: ["Undo가 부족해진다", "FRA가 Flashback 로그로 가득 차 아카이브가 멈출 수 있다", "SGA가 부족해진다", "Redo 그룹이 삭제된다"], a: 1, e: "GRP는 지울 때까지 Flashback 로그를 보존하므로 FRA를 계속 차지합니다. 작업 후 DROP RESTORE POINT를 잊지 마세요." },
+ { q: "DB_FLASHBACK_RETENTION_TARGET의 기본값은?", o: ["60분", "1440분", "4320분", "무제한"], a: 1, e: "기본값은 1440분(하루)입니다. 목표값이며, FRA 공간이 모자라면 그보다 짧아질 수 있습니다." }
+]},
+rac: { lessons: [
+{ id:"rac-5", title:"RAC 인스턴스 롤링 재기동", min:5, body:[
+ ["p","파라미터 변경·OS 패치처럼 인스턴스 재기동이 필요할 때, RAC는 한 노드씩 돌아가며 재기동해서 서비스를 멈추지 않습니다."],
+ ["p","◎ 1번 노드부터, 끝나면 2번 노드에서 같은 순서로 반복합니다."],
+ ["code","bash","# oracle 계정 (DB 홈)\n# STEP 1. 현재 상태\nsrvctl status database -db DBBIG -verbose\nsrvctl status service -db DBBIG\n\n# STEP 2. 1번 노드 서비스를 2번 노드로 이동 (세션 drain 대기)\nsrvctl relocate service -db DBBIG -service OLTP_SVC -oldinst DBBIG1 -newinst DBBIG2 -drain_timeout 300\n\n# STEP 3. 남은 세션 확인 (SQL*Plus)\n#   SELECT inst_id, service_name, COUNT(*) FROM gv$session WHERE type='USER' GROUP BY inst_id, service_name;\n\n# STEP 4. 1번 인스턴스만 종료 → 기동\nsrvctl stop instance -db DBBIG -instance DBBIG1 -stopoption immediate\nsrvctl start instance -db DBBIG -instance DBBIG1\n\n# STEP 5. 서비스 원위치\nsrvctl relocate service -db DBBIG -service OLTP_SVC -oldinst DBBIG2 -newinst DBBIG1"],
+ ["warn","SQL*Plus의 SHUTDOWN 대신 srvctl을 쓰는 이유: Clusterware가 '관리자가 일부러 내린 것'으로 알아야 자동 재기동하지 않고, 상태(TARGET)도 맞게 관리됩니다."],
+ ["tip","파라미터를 SCOPE=SPFILE SID='*'로 바꿨다면 롤링 재기동 중에는 노드마다 값이 다른 상태가 잠시 생깁니다. RAC에서 모든 인스턴스가 같은 값이어야 하는 파라미터는 롤링으로 바꿀 수 없으니 Reference 문서의 'Oracle RAC' 항목을 먼저 확인하세요."]
+]},
+{ id:"rac-6", title:"OCR·Voting Disk·OLR 백업과 확인", min:5, body:[
+ ["p","OCR은 클러스터 리소스 구성 정보, Voting Disk는 노드 멤버십 판단, OLR(Oracle Local Registry)은 각 노드에서 GI 하위 스택을 띄우는 데 필요한 로컬 정보입니다."],
+ ["code","bash","# root 또는 grid 계정\n/u01/app/19.0.0/grid/bin/ocrcheck                    # OCR 무결성 (root로 실행해야 논리 점검까지)\n/u01/app/19.0.0/grid/bin/ocrcheck -local             # OLR 점검\n/u01/app/19.0.0/grid/bin/crsctl query css votedisk   # Voting Disk 위치·상태\n\n# OCR 자동 백업 목록과 위치\n/u01/app/19.0.0/grid/bin/ocrconfig -showbackup\n\n# 작업 전 수동 백업 (root)\n/u01/app/19.0.0/grid/bin/ocrconfig -manualbackup\n/u01/app/19.0.0/grid/bin/ocrconfig -local -manualbackup   # OLR"],
+ ["p","Clusterware는 OCR을 4시간마다 자동으로 백업하고, 4시간·하루·일주일 단위로 일정 개수를 보관합니다. 실제로 남아 있는 백업과 위치는 ocrconfig -showbackup으로 확인하세요. 수동 백업(-manualbackup)은 root로 실행합니다."],
+ ["tip","GI 패치·노드 추가처럼 클러스터 구성을 바꾸는 작업 전에는 ocrconfig -manualbackup과 -local -manualbackup을 작업 계획서 STEP에 넣어 두면 롤백 근거가 생깁니다."]
+]}],
+  quiz: [
+ { q: "RAC에서 인스턴스 하나만 내릴 때 SQL*Plus SHUTDOWN 대신 srvctl stop instance를 권장하는 이유는?", o: ["더 빠르기 때문", "Clusterware가 의도적 종료로 인식해 자동 재기동하지 않고 상태를 맞게 관리하기 때문", "SQL*Plus로는 RAC 인스턴스를 내릴 수 없기 때문", "srvctl만 ABORT를 지원하기 때문"], a: 1, e: "srvctl로 내리면 리소스 TARGET이 OFFLINE으로 바뀌어 Clusterware가 의도된 종료로 다룹니다." },
+ { q: "OLR(Oracle Local Registry)을 점검하는 명령은?", o: ["ocrcheck -local", "crsctl query css votedisk", "olsnodes -n", "srvctl config database"], a: 0, e: "ocrcheck -local은 각 노드의 OLR을 점검합니다." },
+ { q: "Clusterware의 OCR 자동 백업 주기는?", o: ["1시간", "4시간", "하루", "자동 백업 없음"], a: 1, e: "4시간마다 자동 백업하고 4시간·하루·일주일 단위로 보관합니다. ocrconfig -showbackup으로 확인합니다." }
+]},
+asm: { lessons: [
+{ id:"asm-4", title:"ASM 디스크 추가·교체", min:5, body:[
+ ["p","새 디스크를 디스크그룹에 넣기 전, ASM이 그 디스크를 '쓸 수 있는 후보'로 보는지부터 확인합니다."],
+ ["tbl",[["V$ASM_DISK.HEADER_STATUS","의미"],["CANDIDATE","아무 디스크그룹에도 속하지 않은 새 디스크 — 추가 가능"],["PROVISIONED","ASMLib·AFD 등으로 표시됐지만 아직 미사용 — 추가 가능"],["MEMBER","이미 디스크그룹에 속함"],["FORMER","예전에 속했다가 깨끗이 빠진 디스크 — 추가 가능"]]],
+ ["code","sql","-- grid 계정, sqlplus / as sysasm\nSELECT path, header_status, mount_status, os_mb FROM v$asm_disk ORDER BY path;\n\n-- 디스크 추가 (리밸런스 속도 8)\nALTER DISKGROUP DATA ADD DISK '/dev/oracleasm/disks/DATA05' REBALANCE POWER 8;\n\n-- 교체: 추가와 삭제를 한 문장으로 → 리밸런스 한 번만\nALTER DISKGROUP DATA ADD DISK '/dev/oracleasm/disks/DATA06'\n  DROP DISK DATA_0001 REBALANCE POWER 8;\n\n-- 진행률\nSELECT group_number, operation, state, power, sofar, est_work, est_minutes FROM v$asm_operation;"],
+ ["ul",["ASM_POWER_LIMIT 기본값은 1입니다. POWER를 높이면 빨리 끝나지만 I/O 부하가 커지니 업무 시간에는 낮게 잡습니다.","DROP DISK는 리밸런스로 데이터가 다 옮겨진 뒤에 실제로 빠집니다. V$ASM_OPERATION이 비기 전에는 물리 디스크를 빼면 안 됩니다.","같은 디스크그룹의 디스크는 크기와 성능이 같아야 균등하게 쓰입니다."]],
+ ["tip","Exadata는 그리드 디스크 단위로 ASM이 자동 관리합니다. 물리 디스크 교체 흐름은 10호선 'Exadata 디스크 교체 흐름' 역을 보세요."]
+]},
+{ id:"asm-5", title:"ASM 인스턴스 점검 포인트", min:4, body:[
+ ["code","bash","# grid 계정, 1번 노드 예\nexport ORACLE_SID=+ASM1\n\n# ASM alert 로그 (grid의 ORACLE_BASE 기준)\ntail -100 $ORACLE_BASE/diag/asm/+asm/+ASM1/trace/alert_+ASM1.log\n\nasmcmd lsdg          # 디스크그룹 상태·용량\nasmcmd lsop          # 진행 중인 리밸런스\nasmcmd lsct          # 이 ASM에 붙은 DB 인스턴스(클라이언트)"],
+ ["code","sql","-- sqlplus / as sysasm\nSHOW PARAMETER asm_diskstring\nSHOW PARAMETER asm_power_limit\n\n-- 디스크그룹 호환성 속성 (기능 사용 가능 여부를 좌우)\nSELECT g.name, a.name attr, a.value\nFROM   v$asm_diskgroup g JOIN v$asm_attribute a ON a.group_number = g.group_number\nWHERE  a.name IN ('compatible.asm','compatible.rdbms','disk_repair_time','failgroup_repair_time');"],
+ ["warn","compatible.asm·compatible.rdbms는 올리면 되돌릴 수 없습니다. 같은 디스크그룹을 쓰는 가장 낮은 DB 버전보다 compatible.rdbms를 높이면 그 DB가 디스크그룹을 못 씁니다."]
+]}],
+  quiz: [
+ { q: "디스크그룹에 추가할 수 없는 디스크의 HEADER_STATUS는?", o: ["CANDIDATE", "PROVISIONED", "FORMER", "MEMBER"], a: 3, e: "MEMBER는 이미 어떤 디스크그룹에 속한 디스크입니다." },
+ { q: "디스크를 교체할 때 ADD와 DROP을 한 문장으로 쓰는 이유는?", o: ["문법상 필수", "리밸런스를 한 번만 하게 하려고", "DROP을 즉시 끝내려고", "ASM_POWER_LIMIT를 무시하려고"], a: 1, e: "따로 하면 리밸런스가 두 번 돌지만, 한 문장으로 하면 한 번에 데이터가 재배치됩니다." },
+ { q: "compatible.rdbms 속성에 대한 설명으로 옳은 것은?", o: ["언제든 낮출 수 있다", "한번 올리면 되돌릴 수 없다", "ASM 인스턴스 재기동 시 초기화된다", "Exadata에서는 무시된다"], a: 1, e: "디스크그룹 호환성 속성은 올리기만 가능하고 낮출 수 없습니다." }
+]},
+sec: { lessons: [
+{ id:"sec-4", title:"PUBLIC·ANY 권한 점검 (보안 진단 대응)", min:5, body:[
+ ["p","보안 진단에서 자주 지적되는 두 가지는 'PUBLIC에 열린 위험 패키지'와 '애플리케이션 계정의 ANY 시스템 권한'입니다."],
+ ["code","sql","-- PUBLIC에 EXECUTE가 열린 네트워크·파일 관련 패키지\nSELECT owner, table_name, privilege\nFROM   dba_tab_privs\nWHERE  grantee = 'PUBLIC'\nAND    table_name IN ('UTL_FILE','UTL_TCP','UTL_SMTP','UTL_HTTP','UTL_INADDR','DBMS_LOB','DBMS_RANDOM');\n\n-- 오라클 기본 계정이 아닌 사용자에게 준 ANY 권한\nSELECT p.grantee, p.privilege\nFROM   dba_sys_privs p JOIN dba_users u ON u.username = p.grantee\nWHERE  p.privilege LIKE '%ANY%' AND u.oracle_maintained = 'N'\nORDER  BY 1, 2;"],
+ ["p","**회수 순서 (장애 예방)**"],
+ ["ul",["STEP 1. 해당 패키지를 실제로 쓰는 계정을 확인합니다 (DBA_DEPENDENCIES, 애플리케이션 담당자 확인).","STEP 2. 쓰는 계정에는 먼저 직접 GRANT EXECUTE ON UTL_FILE TO app_user; 를 합니다.","STEP 3. 그다음 REVOKE EXECUTE ON UTL_FILE FROM PUBLIC; 을 합니다.","STEP 4. INVALID 객체가 생겼는지 확인하고 utlrp.sql로 재컴파일합니다."]],
+ ["warn","오라클 기본 계정(ORACLE_MAINTAINED = 'Y')이 쓰는 권한까지 일괄 회수하면 패치·업그레이드나 내부 기능이 깨질 수 있습니다. 진단 결과는 '조치 대상'과 '예외(사유 기록)'로 나눠 정리하세요."]
+]},
+{ id:"sec-5", title:"sqlnet.ora 접속 통제와 인증 버전", min:5, body:[
+ ["p","리스너 단에서 접속 가능한 IP를 제한하려면 DB 서버의 sqlnet.ora에 허용 목록을 넣습니다."],
+ ["code","text","# $ORACLE_HOME/network/admin/sqlnet.ora (RAC·리스너가 GI 홈이면 GI 홈 쪽)\nTCP.VALIDNODE_CHECKING = YES\nTCP.INVITED_NODES = (localhost, 10.10.1.11, 10.10.1.12, 10.10.20.0/24)\n\n# 접속 허용 최소 인증 프로토콜 버전 (19c 기본 12)\nSQLNET.ALLOWED_LOGON_VERSION_SERVER = 12"],
+ ["ul",["허용 목록에는 DB 서버 자신(localhost·자기 IP), RAC 상대 노드, 애플리케이션·관리 서버, 백업·모니터링 서버를 빠짐없이 넣어야 합니다.","적용은 리스너를 재기동해야 확실합니다. RAC는 노드별 리스너와 SCAN 리스너가 쓰는 sqlnet.ora 위치를 각각 확인하세요.","SQLNET.ALLOWED_LOGON_VERSION_SERVER를 높이면 오래된 클라이언트·드라이버(예: 10g JDBC)가 ORA-28040으로 접속하지 못합니다."]],
+ ["code","bash","# 적용 후 확인 (grid 또는 oracle 계정, 리스너 소유자)\nlsnrctl status\n# 허용되지 않은 IP에서 접속하면 클라이언트는 ORA-12537(connection closed)을 받습니다."],
+ ["tip","변경 전 sqlnet.ora를 날짜 붙여 백업해 두고, 허용 목록 누락으로 접속 장애가 나면 TCP.VALIDNODE_CHECKING = NO로 되돌린 뒤 리스너를 재기동하는 롤백 절차를 계획서에 함께 적어 두세요."]
+]}],
+  quiz: [
+ { q: "PUBLIC의 UTL_FILE EXECUTE 권한을 회수하기 전에 먼저 할 일은?", o: ["DB 재기동", "실제로 쓰는 계정에 직접 GRANT", "UTL_FILE 패키지 삭제", "PUBLIC 롤 삭제"], a: 1, e: "쓰는 계정에 먼저 직접 권한을 준 뒤 PUBLIC에서 회수해야 애플리케이션 장애가 나지 않습니다." },
+ { q: "sqlnet.ora에서 접속 허용 IP 목록을 지정하는 파라미터는?", o: ["TCP.EXCLUDED_NODES", "TCP.INVITED_NODES", "SQLNET.EXPIRE_TIME", "NAMES.DIRECTORY_PATH"], a: 1, e: "TCP.VALIDNODE_CHECKING = YES와 함께 TCP.INVITED_NODES에 허용 목록을 적습니다." },
+ { q: "19c에서 SQLNET.ALLOWED_LOGON_VERSION_SERVER의 기본값은?", o: ["8", "11", "12", "12a"], a: 2, e: "19c 기본값은 12입니다. 값을 높이면 오래된 클라이언트가 ORA-28040으로 접속하지 못할 수 있습니다." }
+]},
+dg: { lessons: [
+{ id:"dg-4", title:"Failover와 Reinstate", min:5, body:[
+ ["p","Switchover는 계획된 역할 교대(데이터 손실 없음)이고, Failover는 Primary가 죽었을 때 Standby를 Primary로 올리는 비상 조치입니다."],
+ ["code","bash","dgmgrl sys@DBBIG_STBY\n\nDGMGRL> SHOW CONFIGURATION;\nDGMGRL> FAILOVER TO 'DBBIG_STBY';\n\n# 옛 Primary를 고친 뒤 MOUNT로 올리고 Standby로 재편입\nDGMGRL> REINSTATE DATABASE 'DBBIG';\nDGMGRL> SHOW CONFIGURATION;"],
+ ["ul",["REINSTATE는 옛 Primary에 Flashback Database가 켜져 있어야 합니다. 꺼져 있었다면 Standby를 새로 만들어야(재구축) 합니다.","보호 모드가 Maximum Performance(ASYNC)라면 Failover 때 마지막 몇 초의 트랜잭션이 넘어오지 못했을 수 있습니다.","Fast-Start Failover를 쓰면 Observer가 Primary 장애를 감지해 자동으로 Failover합니다."]],
+ ["warn","Primary가 살아 있는데 네트워크만 끊긴 상황에서 Failover하면 두 DB가 모두 Primary가 되는 split-brain 위험이 있습니다. 옛 Primary가 확실히 내려갔는지(또는 내릴 수 있는지) 먼저 확인하세요."]
+]},
+{ id:"dg-5", title:"Data Guard 상태 점검 쿼리", min:4, body:[
+ ["code","sql","-- Standby에서: 전송·적용 지연\nSELECT name, value, time_computed FROM v$dataguard_stats\nWHERE  name IN ('transport lag','apply lag','apply finish time');\n\n-- 19c 프로세스 상태 (V$MANAGED_STANDBY 대체)\nSELECT name, role, action, sequence#, block# FROM v$dataguard_process;\n\n-- 마지막으로 받은/적용한 시퀀스 (Standby)\nSELECT thread#, MAX(sequence#) last_received FROM v$archived_log GROUP BY thread#;\nSELECT thread#, MAX(sequence#) last_applied FROM v$archived_log WHERE applied = 'YES' GROUP BY thread#;\n\n-- Primary에서: 전송 대상 에러\nSELECT dest_id, status, error FROM v$archive_dest_status WHERE status <> 'INACTIVE';"],
+ ["tip","apply lag가 계속 커지면 Standby I/O·CPU, MRP0 상태, Gap(아카이브 누락)을 순서대로 봅니다. transport lag가 크면 네트워크나 Primary의 전송 설정을 의심합니다."]
+]}],
+  quiz: [
+ { q: "Failover 후 옛 Primary를 REINSTATE로 재편입하려면 옛 Primary에 무엇이 켜져 있어야 하나?", o: ["Block Change Tracking", "Flashback Database", "Force Logging만", "Unified Auditing"], a: 1, e: "REINSTATE는 Flashback Database로 옛 Primary를 Failover 시점 이전으로 되돌린 뒤 Standby로 전환합니다." },
+ { q: "Standby의 전송·적용 지연을 보는 뷰는?", o: ["V$DATAGUARD_STATS", "V$LOGFILE", "DBA_REGISTRY", "V$ASM_OPERATION"], a: 0, e: "V$DATAGUARD_STATS의 transport lag·apply lag로 지연을 확인합니다." }
+]},
+perf: { lessons: [
+{ id:"perf-6", title:"SQL Plan Baseline으로 실행계획 고정", min:6, body:[
+ ["p","통계 갱신이나 패치 후 같은 SQL의 실행계획(plan hash value)이 바뀌어 느려졌다면, 예전의 좋은 계획을 SQL Plan Baseline으로 고정할 수 있습니다."],
+ ["code","sql","-- STEP 1. SQL의 계획 이력 확인 (AWR, Diagnostics Pack 필요)\nSELECT snap_id, plan_hash_value, executions_delta,\n       ROUND(elapsed_time_delta/NULLIF(executions_delta,0)/1000) AS avg_ms\nFROM   dba_hist_sqlstat WHERE sql_id = '&sql_id' ORDER BY snap_id;\n\n-- STEP 2. 지금 커서 캐시에 있는 좋은 계획을 Baseline으로 적재\nDECLARE n PLS_INTEGER;\nBEGIN\n  n := DBMS_SPM.LOAD_PLANS_FROM_CURSOR_CACHE(sql_id => '&sql_id', plan_hash_value => &good_phv);\n  DBMS_OUTPUT.PUT_LINE('loaded: ' || n);\nEND;\n/\n\n-- STEP 3. 확인 (ENABLED·ACCEPTED = YES)\nSELECT sql_handle, plan_name, enabled, accepted, fixed, created\nFROM   dba_sql_plan_baselines ORDER BY created DESC;"],
+ ["ul",["OPTIMIZER_USE_SQL_PLAN_BASELINES 기본값은 TRUE라서, 적재하면 바로 사용됩니다.","자동 수집(OPTIMIZER_CAPTURE_SQL_PLAN_BASELINES)은 기본 FALSE입니다.","좋은 계획이 커서 캐시에 없고 AWR에만 있으면 SQL Tuning Set을 거쳐 적재하거나, 지원 도구(SQLT의 coe_xfr_sql_profile.sql)로 SQL Profile을 만드는 방법을 씁니다."]],
+ ["warn","Baseline은 '응급 처치'입니다. 데이터 분포가 바뀌면 고정한 계획이 오히려 나빠질 수 있으니, 원인(통계·바인드·인덱스 변경)을 함께 찾고 정기적으로 다시 검토하세요."]
+]},
+{ id:"perf-7", title:"OS 자원 점검: CPU·메모리·I/O", min:5, body:[
+ ["p","DB 대기 이벤트만 보고 있으면 OS 쪽 원인을 놓칩니다. 장애 시점에 서버 자원이 어땠는지 같이 보세요."],
+ ["code","bash","vmstat 5 5           # r(실행 대기) > CPU 코어 수가 계속이면 CPU 부족, si/so > 0 이면 스왑 발생\niostat -xm 5 3       # %util, await(ms)로 디스크 지연 확인\nfree -g              # 메모리·스왑 사용량\nsar -u -f /var/log/sa/sa$(date +%d)   # 오늘 CPU 이력 (sysstat 설치 시)\n\n# HugePages 사용 확인 (SGA가 HugePages에 올라갔는지)\ngrep -i huge /proc/meminfo"],
+ ["ul",["HugePages_Free가 HugePages_Total과 거의 같다면 SGA가 HugePages를 쓰지 못하고 있는 것입니다. alert 로그의 'Large Pages Information'을 확인하세요.","스왑이 계속 쓰이면 SGA·PGA 합계가 물리 메모리에 비해 과한지 봅니다 (PGA_AGGREGATE_LIMIT 포함).","AHF(TFA)를 설치하면 OSWatcher가 함께 돌며 장애 시점 OS 이력을 남기고, tfactl diagcollect 결과에 포함됩니다."]],
+ ["tip","노드 Eviction이나 hang 분석 때는 장애 '직전 몇 분'의 OSWatcher vmstat·top 기록이 가장 중요한 증거입니다. SR에 꼭 첨부하세요."]
+]}],
+  quiz: [
+ { q: "OPTIMIZER_USE_SQL_PLAN_BASELINES의 기본값은?", o: ["TRUE", "FALSE", "AUTO", "NONE"], a: 0, e: "기본값이 TRUE라 Baseline을 적재하면 옵티마이저가 바로 사용합니다. 자동 수집 파라미터(OPTIMIZER_CAPTURE_SQL_PLAN_BASELINES)는 기본 FALSE입니다." },
+ { q: "vmstat에서 si/so 값이 계속 0보다 크다는 것은?", o: ["CPU 과부하", "스왑 입출력 발생 (메모리 부족 신호)", "디스크 정상", "네트워크 지연"], a: 1, e: "si/so는 스왑 in/out입니다. 계속 발생하면 메모리가 부족하다는 신호입니다." }
+]},
+patch: { lessons: [
+{ id:"patch-5", title:"패치 전 점검 체크리스트", min:6, body:[
+ ["p","◎ 1번 노드에서 먼저 점검하고, 같은 점검을 2번 노드에서도 반복합니다. <RU_DIR>는 압축을 푼 패치 디렉터리입니다."],
+ ["code","bash","# STEP 1. 현재 패치 상태 (홈 소유자 계정)\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch lspatches\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch version     # RU README의 최소 OPatch 버전과 비교\n\n# STEP 2. 충돌 점검\ncd <RU_DIR>\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch prereq CheckConflictAgainstOHWithDetail -ph ./\n\n# STEP 3. 디스크 공간 점검\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch prereq CheckSystemSpace -ph ./\n\n# STEP 4. GI까지 opatchauto로 할 경우 분석만 (root)\n/u01/app/19.0.0/grid/OPatch/opatchauto apply <RU_DIR> -analyze"],
+ ["code","sql","-- STEP 5. DB 쪽 사전 상태\nSELECT patch_id, action, status, description FROM dba_registry_sqlpatch ORDER BY action_time;\nSELECT owner, COUNT(*) FROM dba_objects WHERE status = 'INVALID' GROUP BY owner;"],
+ ["code","bash","# STEP 6. 홈 백업 (root, DB·GI 중지 상태 권장)\ntar -czpf /backup/dbhome_1_$(date +%Y%m%d).tgz -C /u01/app/oracle/product/19.0.0 dbhome_1"],
+ ["tip","작업 전 INVALID 객체 목록을 저장해 두면, 작업 후 생긴 INVALID가 '원래 있던 것'인지 '패치로 생긴 것'인지 바로 구분할 수 있습니다."]
+]},
+{ id:"patch-6", title:"datapatch 이해와 실패 대응", min:5, body:[
+ ["p","opatch가 바이너리(ORACLE_HOME)를 바꾼다면, datapatch는 DB 안의 SQL 레벨 변경(딕셔너리·패키지)을 적용합니다. RU를 홈에 적용한 뒤 그 홈을 쓰는 모든 DB(모든 PDB 포함)에서 한 번씩 돌아야 합니다."],
+ ["code","bash","# oracle 계정, DB OPEN 상태 (CDB면 PDB들도 OPEN)\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/datapatch -verbose\n\n# 로그 위치\nls -lt $ORACLE_BASE/cfgtoollogs/sqlpatch/"],
+ ["code","sql","SELECT patch_id, action, status, target_version, action_time\nFROM   dba_registry_sqlpatch ORDER BY action_time DESC;\n\n-- CDB에서 PDB별 확인\nSELECT con_id, patch_id, status FROM cdb_registry_sqlpatch ORDER BY con_id, action_time;"],
+ ["ul",["STATUS가 WITH ERRORS면 로그에서 실패한 SQL과 ORA 에러를 찾아 원인을 해결한 뒤 datapatch를 다시 실행합니다. 이미 적용된 것은 건너뛰므로 재실행해도 됩니다.","작업 시 닫혀 있던 PDB는 나중에 열고 datapatch를 다시 돌려야 합니다.","RAC는 한 노드에서 한 번만 실행하면 됩니다(DB 단위 작업)."]],
+ ["tip","datapatch 뒤에는 @?/rdbms/admin/utlrp.sql로 INVALID 객체를 재컴파일하고, 패치 전 목록과 비교하세요."]
+]}],
+  quiz: [
+ { q: "Oracle 홈과 패치 사이의 충돌을 미리 확인하는 opatch 명령은?", o: ["opatch lsinventory -detail", "opatch prereq CheckConflictAgainstOHWithDetail -ph ./", "opatch apply -silent", "opatch util cleanup"], a: 1, e: "CheckConflictAgainstOHWithDetail로 기존 패치와의 충돌·슈퍼셋 관계를 미리 확인합니다." },
+ { q: "datapatch 결과 STATUS가 WITH ERRORS일 때 올바른 대응은?", o: ["RU 전체를 롤백한다", "로그로 원인을 해결하고 datapatch를 다시 실행한다", "DB를 재생성한다", "무시해도 된다"], a: 1, e: "원인을 해결한 뒤 재실행하면 됩니다. 이미 적용된 부분은 건너뜁니다." },
+ { q: "RAC DB에서 datapatch는 몇 번 실행하나?", o: ["노드 수만큼", "DB당 한 노드에서 한 번", "PDB 수만큼 노드마다", "실행하지 않아도 된다"], a: 1, e: "datapatch는 DB(딕셔너리) 단위 작업이라 한 노드에서 한 번 실행합니다. 바이너리 패치는 노드마다 합니다." }
+]},
+trouble: { lessons: [
+{ id:"tr-5", title:"접속 장애: ORA-12514·12541·12170", min:5, body:[
+ ["tbl",[["에러","뜻","먼저 볼 것"],["ORA-12541","TNS:no listener — 그 주소에 리스너가 없음","리스너 기동 여부, HOST·PORT 오타"],["ORA-12514","리스너가 요청한 SERVICE_NAME을 모름","DB 기동 여부, 서비스 등록(LREG), 서비스명 오타"],["ORA-12505","리스너가 요청한 SID를 모름","SID 대신 SERVICE_NAME 사용 여부"],["ORA-12170","접속 시간 초과","방화벽, 라우팅, 서버 다운"],["ORA-12537","접속이 닫힘","sqlnet.ora 접속 허용 목록(TCP.INVITED_NODES)"]]],
+ ["code","bash","# 서버에서 (리스너 소유자 계정)\nlsnrctl status\nlsnrctl services          # 서비스가 READY로 등록됐는지\n\n# 클라이언트에서\ntnsping DBBIG\nnc -vz 10.10.1.21 1521    # 포트가 열려 있는지 (방화벽 확인)"],
+ ["code","sql","-- 서비스가 리스너에 안 보일 때 (DB에서)\nSHOW PARAMETER local_listener\nSHOW PARAMETER service_names\nALTER SYSTEM REGISTER;      -- 리스너에 즉시 재등록"],
+ ["tip","RAC에서 SCAN으로는 되는데 VIP로는 안 되거나 그 반대라면, local_listener·remote_listener 설정과 srvctl config scan_listener 결과를 비교해 보세요."]
+]},
+{ id:"tr-6", title:"DB hang 진단: hanganalyze", min:6, body:[
+ ["p","DB가 응답하지 않아 일반 접속조차 안 될 때, SR에 필요한 진단 정보를 남기는 표준 절차입니다(MOS 452358.1 'How to Collect Diagnostics for Database Hanging Issues')."],
+ ["code","bash","# oracle 계정 — 일반 접속이 안 될 때 prelim 모드로 붙기\nsqlplus -prelim \"/ as sysdba\""],
+ ["code","sql","-- 단일 인스턴스\noradebug setmypid\noradebug unlimit\noradebug hanganalyze 3\n-- 1~2분 기다렸다가 한 번 더 (변화를 보기 위해)\noradebug hanganalyze 3\noradebug tracefile_name\n\n-- RAC: 모든 인스턴스 대상\noradebug setmypid\noradebug unlimit\noradebug -g all hanganalyze 3"],
+ ["ul",["hanganalyze 결과 트레이스에서 'Chains most likely to have caused the hang' 부분이 블로킹 체인의 핵심입니다.","systemstate 덤프(oradebug dump systemstate 258)는 정보가 많지만 시스템이 클수록 오래 걸리고 부하가 큽니다. 지원 엔지니어가 요청할 때 수행하세요.","prelim 모드에서는 SQL 조회가 안 됩니다. oradebug 명령만 씁니다."]],
+ ["warn","진단 수집 없이 바로 SHUTDOWN ABORT로 재기동하면 원인을 찾을 근거가 사라집니다. 서비스 영향이 허용하는 범위에서 hanganalyze 2회 + AHF 수집을 먼저 하세요."]
+]}],
+  quiz: [
+ { q: "ORA-12514의 의미는?", o: ["리스너가 없음", "리스너가 요청한 서비스명을 모름", "접속 시간 초과", "비밀번호 오류"], a: 1, e: "리스너는 떠 있지만 요청한 SERVICE_NAME이 등록되어 있지 않은 상태입니다. DB 기동·서비스 등록을 확인합니다." },
+ { q: "DB가 hang되어 일반 접속이 안 될 때 SQL*Plus로 붙는 방법은?", o: ["sqlplus -s", "sqlplus -prelim \"/ as sysdba\"", "sqlplus /nolog만", "rman target /"], a: 1, e: "prelim 모드는 SGA에 붙기만 하고 세션을 만들지 않아 hang 상태에서도 oradebug를 쓸 수 있습니다." },
+ { q: "RAC 전체 인스턴스에 hanganalyze를 수행하는 명령은?", o: ["oradebug hanganalyze 3", "oradebug -g all hanganalyze 3", "oradebug dump systemstate 10", "alter system hanganalyze"], a: 1, e: "-g all 옵션으로 모든 인스턴스에서 수행합니다." }
+]},
+exa: { lessons: [
+{ id:"exa-4", title:"Exadata 디스크 교체 흐름", min:5, body:[
+ ["p","Exadata는 물리 디스크 → 셀 디스크 → 그리드 디스크 → ASM 디스크로 이어지고, 디스크 장애가 나면 ASM 쪽 처리를 셀 소프트웨어가 자동으로 해 줍니다. DBA는 '빼도 되는 상태인지'를 확인하는 게 핵심입니다."],
+ ["code","bash","# celladmin 또는 root, 해당 셀에서\ncellcli -e \"list physicaldisk where status != normal detail\"\ncellcli -e \"list griddisk attributes name, status, asmmodestatus, asmdeactivationoutcome\"\ncellcli -e \"list alerthistory where severity != 'info'\""],
+ ["ul",["'warning - predictive failure' 상태가 되면 해당 그리드 디스크가 ASM에서 자동으로 빠지고 리밸런스가 돕니다.","리밸런스가 끝났는지 ASM에서 V$ASM_OPERATION으로 확인한 뒤 교체합니다.","교체 대상 디스크는 서비스 LED로 표시됩니다. 새 디스크를 넣으면 셀 디스크·그리드 디스크가 다시 만들어지고 ASM에 자동으로 다시 추가됩니다(이후 리밸런스)."]],
+ ["code","sql","-- ASM (grid, sysasm)\nSELECT group_number, operation, state, est_minutes FROM v$asm_operation;\nSELECT name, path, mode_status, state FROM v$asm_disk WHERE mode_status <> 'ONLINE' OR state <> 'NORMAL';"],
+ ["warn","여러 셀에서 동시에 디스크를 빼면 안 됩니다. 다른 셀의 asmdeactivationoutcome이 'Yes'가 아니면 이중화가 깨진 상태일 수 있으니, 리밸런스 완료와 이중화 상태를 확인한 뒤 한 번에 하나씩 진행하세요."]
+]}],
+  quiz: [
+ { q: "Exadata에서 물리 디스크를 빼기 전 ASM 쪽에서 확인할 것은?", o: ["V$ASM_OPERATION이 비었는지(리밸런스 완료)", "V$LOG가 CURRENT인지", "DBA_USERS 잠금 여부", "OCR 백업 여부만"], a: 0, e: "자동으로 디스크가 빠진 뒤 리밸런스가 끝났는지 확인해야 데이터 이중화가 유지됩니다." },
+ { q: "predictive failure 디스크가 생겼을 때 Exadata가 자동으로 하는 일은?", o: ["DB를 재기동한다", "해당 그리드 디스크를 ASM에서 빼고 리밸런스한다", "셀을 종료한다", "아무 일도 하지 않는다"], a: 1, e: "셀 소프트웨어가 ASM 디스크를 자동으로 drop하고 리밸런스로 데이터를 옮깁니다." }
+]}
+  };
+  var REF = {
+    "space-5": [["Database Administrator's Guide 19c · Using Flashback Drop and Managing the Recycle Bin", D + "admin/managing-tables.html"]],
+    "rman-5": [["Backup and Recovery User's Guide 19c (Validating Database Files and Backups 장)", D + "bradv/index.html"]],
+    "rman-6": [["Backup and Recovery User's Guide 19c · Using Flashback Database and Restore Points", D + "bradv/using-flasback-database-restore-points.html"], ["Database Reference 19c · DB_FLASHBACK_RETENTION_TARGET", D + "refrn/DB_FLASHBACK_RETENTION_TARGET.html"]],
+    "rac-5": [["RAC Administration 19c · Server Control Utility Reference", D + "racad/server-control-utility-reference.html"]],
+    "rac-6": [["Clusterware Administration 19c · Managing Oracle Cluster Registry and Voting Files", D + "cwadd/managing-oracle-cluster-registry-and-voting-files.html"]],
+    "asm-4": [["ASM Administrator's Guide 19c · Administering Oracle ASM Disk Groups", D + "ostmg/alter-diskgroups.html"]],
+    "asm-5": [["ASM Administrator's Guide 19c · Managing Disk Group Attributes", D + "ostmg/manage-diskgroup-attributes.html"]],
+    "sec-4": [["Security Guide 19c (부록 Keeping Your Oracle Database Secure)", D + "dbseg/index.html"]],
+    "sec-5": [["Net Services Reference 19c · Parameters for sqlnet.ora", D + "netrf/parameters-for-the-sqlnet.ora.html"]],
+    "dg-4": [["Data Guard Broker 19c (Switchover and Failover Operations 장)", D + "dgbkr/index.html"]],
+    "dg-5": [["Database Reference 19c · V$DATAGUARD_STATS", D + "refrn/V-DATAGUARD_STATS.html"]],
+    "perf-6": [["SQL Tuning Guide 19c · Managing SQL Plan Baselines", D + "tgsql/managing-sql-plan-baselines.html"]],
+    "patch-5": [["Database Patch Maintenance 19c", D + "dbptc/index.html"]],
+    "patch-6": [["Database Patch Maintenance 19c", D + "dbptc/index.html"]],
+    "tr-5": [["Net Services Administrator's Guide 19c (Troubleshooting Oracle Net Services 장)", D + "netag/index.html"]],
+    "exa-4": [["Exadata Database Machine Maintenance Guide (Maintaining Exadata Storage Servers 장)", X + "dbmmn/index.html"]], "tr-6": [["MOS 452358.1 · How to Collect Diagnostics for Database Hanging Issues", "https://support.oracle.com/epmos/faces/DocumentDisplay?id=452358.1"]]
+  };
+  Object.keys(MORE).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    MORE[id].lessons.forEach(function (l) { if (REF[l.id]) l.ref = REF[l.id]; c.lessons.push(l); });
+    c.quiz = c.quiz.concat(MORE[id].quiz);   // 기존 문제 뒤에 추가 (문제 번호 = 기록 ID 유지)
+  });
+})();

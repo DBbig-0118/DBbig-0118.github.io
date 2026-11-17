@@ -62,6 +62,7 @@ window.DBBIG_GLOSSARY = [
   { k: "ASM", f: "Automatic Storage Management", g: "rac", d: "Oracle 전용 볼륨 관리자이자 파일시스템. 디스크 그룹 단위로 관리" },
   { k: "CRS", f: "Cluster Ready Services", g: "rac", d: "클러스터 리소스(DB·리스너·VIP 등)를 관리하는 Clusterware 서비스" },
   { k: "CSS", f: "Cluster Synchronization Services", g: "rac", d: "노드 멤버십과 네트워크·디스크 heartbeat 관리" },
+  { k: "OLR", f: "Oracle Local Registry", g: "rac", d: "각 노드에 있는 로컬 레지스트리. GI 하위 스택을 띄우는 데 필요한 정보 저장" },
   { k: "OCR", f: "Oracle Cluster Registry", g: "rac", d: "클러스터 리소스 구성 정보 저장소" },
   { k: "GNS", f: "Grid Naming Service", g: "rac", d: "클러스터 안에서 이름 해석·동적 IP 할당을 맡는 서비스" },
   { k: "SCAN", f: "Single Client Access Name", g: "rac", c: ["rac", "trouble", "exa", "arch"], d: "클라이언트가 클러스터에 접속할 때 쓰는 단일 이름 (보통 IP 3개 + SCAN 리스너 3개)" },
@@ -70,6 +71,7 @@ window.DBBIG_GLOSSARY = [
   { k: "GES", f: "Global Enqueue Service", g: "rac", d: "RAC 인스턴스들 사이의 enqueue(락) 조정 (LMD·LMON이 수행)" },
 
   /* ── 백업·복구·Data Guard ── */
+  { k: "GRP", f: "Guaranteed Restore Point", g: "bk", d: "보장 복원 지점. 지울 때까지 그 시점으로 Flashback Database가 가능하도록 로그를 보존" },
   { k: "RMAN", f: "Recovery Manager", g: "bk", d: "Oracle 백업·복원·복구 도구" },
   { k: "FRA", f: "Fast Recovery Area", g: "bk", d: "백업·아카이브 로그·플래시백 로그 같은 복구 파일 전용 영역" },
   { k: "BCT", f: "Block Change Tracking", g: "bk", d: "변경된 블록을 파일에 기록해 증분 백업이 전체를 읽지 않게 하는 기능" },
@@ -83,6 +85,8 @@ window.DBBIG_GLOSSARY = [
   { k: "ASH", f: "Active Session History", g: "perf", d: "활성 세션 상태를 1초마다 샘플링한 기록" },
   { k: "ADDM", f: "Automatic Database Diagnostic Monitor", g: "perf", d: "AWR 스냅샷을 분석해 성능 문제와 권고를 알려주는 기능" },
   { k: "ADR", f: "Automatic Diagnostic Repository", g: "perf", d: "alert log·트레이스·인시던트를 모아두는 진단 디렉터리 체계" },
+  { k: "AHF", f: "Autonomous Health Framework", g: "perf", d: "TFA·ORAchk/EXAchk·OSWatcher를 묶은 Oracle 진단 도구 모음" },
+  { k: "TFA", f: "Trace File Analyzer", g: "perf", d: "로그·트레이스를 모아 SR용 진단 파일을 만드는 도구 (tfactl diagcollect)" },
   { k: "ADRCI", f: "ADR Command Interpreter", g: "perf", d: "ADR을 조회하고 SR용 패키지를 만드는 명령행 도구" },
 
   /* ── 패치·지원 ── */
