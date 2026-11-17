@@ -494,3 +494,159 @@ quiz:[
   };
   window.DBBIG_CONTENT.forEach(function (c) { if (ADD[c.id]) c.quiz = c.quiz.concat(ADD[c.id]); });
 })();
+
+/* ───────── v0.0.7 아키텍처 보강: UPDATE 한 건의 여행 (사용자 학습 노트 기반, 19c 문서 대조) ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var arch = window.DBBIG_CONTENT.filter(function (c) { return c.id === "arch"; })[0];
+  if (!arch) return;
+  var L = [
+{ id:"arch-5", title:"UPDATE 한 건의 여행 ① 등장인물", min:4, body:[
+ ["p","오라클이 UPDATE 한 건을 처리하는 과정을 사무실에 비유해 보면 등장인물이 한눈에 들어옵니다. 이 노선의 다음 역들은 모두 이 비유를 바탕으로 이어집니다."],
+ ["tbl",[["사무실 비유","오라클 구성요소"],
+  ["창고 (원본 장부 보관, 느림)","데이터파일 (디스크)"],
+  ["내 책상 (지금 작업 중인 장부 페이지)","DB Buffer Cache (SGA 메모리)"],
+  ["\"수정 전에는 이랬음\" 복사본 메모","Undo (언두 세그먼트)"],
+  ["업무일지 초안 메모지 (책상 위)","Redo Log Buffer (SGA 메모리)"],
+  ["업무일지 노트 (금고, 확실한 기록)","온라인 Redo Log File (디스크)"],
+  ["내 전담 직원","서버 프로세스 (세션마다 하나)"],
+  ["일지 담당 비서","LGWR"],
+  ["창고 정리 담당 직원","DBWn"],
+  ["업무 처리 매뉴얼 모음집","Library Cache (Shared Pool)"],
+  ["사내 규정집·인명부","Dictionary Cache (Shared Pool)"]]],
+ ["p","핵심 아이디어는 세 줄입니다."],
+ ["ul",["창고(디스크)에 매번 가서 고치면 느리니까 책상(메모리)에서 빠르게 고친다.","\"무엇을 고쳤는지\"는 업무일지(Redo)에 확실하게 적어 둔다 — 이것만 디스크에 안전하게 남으면 커밋 완료.","창고 정리(데이터파일 반영)는 나중에 천천히 한다 — DBWn이 따로 처리."]],
+ ["tip","\"커밋 = 데이터파일에 저장\"이 아닙니다. 커밋은 Redo가 온라인 Redo Log File에 기록됐다는 뜻이고, 데이터파일 반영은 별개의 일입니다. 이 차이를 이해하면 log file sync, 체크포인트, 인스턴스 복구가 모두 한 줄로 이어집니다."]
+]},
+{ id:"arch-6", title:"UPDATE 한 건의 여행 ② STEP별 내부 동작", min:7, body:[
+ ["p","예제: 홍길동의 월급을 300에서 350으로 바꾸고 확정합니다."],
+ ["code","sql","UPDATE emp SET salary = 350 WHERE name = '홍길동';\nCOMMIT;"],
+ ["p","**STEP 1. 파싱 (요청 접수)** — 서버 프로세스가 Library Cache에서 똑같은 SQL의 공유 SQL 영역을 찾습니다. 있으면 소프트 파싱으로 실행계획을 재사용하고, 없으면 하드 파싱으로 실행계획을 새로 만듭니다. 테이블·컬럼·권한 같은 메타데이터는 Dictionary Cache에서 확인합니다."],
+ ["p","**STEP 2. 블록 확보** — 대상 행이 든 블록이 Buffer Cache에 있으면 그대로 씁니다(논리적 읽기). 없으면 서버 프로세스가 데이터파일에서 읽어 Buffer Cache에 올립니다(물리적 읽기). 데이터파일에서 읽어 오는 것은 DBWn이 아니라 **서버 프로세스**입니다."],
+ ["p","**STEP 3. 잠금** — 바꿀 행에 행 잠금(TX)을 걸고, 테이블에는 다른 세션이 DDL로 구조를 바꾸지 못하게 테이블 잠금(TM)을 겁니다. 다른 세션이 같은 행을 UPDATE하려 하면 커밋·롤백 때까지 기다립니다(대기 이벤트 'enq: TX - row lock contention')."],
+ ["p","**STEP 4. Undo·Redo 생성** — 변경 전 값(300)을 Undo 블록에 기록합니다. 그리고 \"Undo 블록을 이렇게 바꿨다\"와 \"데이터 블록을 이렇게 바꿨다\"는 변경 내용(Redo 엔트리)을 서버 프로세스가 Redo Log Buffer에 씁니다. Undo 자체의 변경도 Redo로 보호된다는 점이 핵심입니다. Redo Log Buffer를 채우는 것은 LGWR가 아니라 **서버 프로세스**입니다."],
+ ["p","**STEP 5. 블록 수정** — Buffer Cache의 블록을 350으로 고칩니다. 이 블록은 디스크와 내용이 달라진 '더티 버퍼'가 됩니다. 데이터파일(디스크)에는 아직 300이 들어 있습니다."],
+ ["p","**STEP 6. COMMIT** — 트랜잭션에 커밋 SCN이 정해지고, 커밋 레코드가 Redo Log Buffer에 들어갑니다. LGWR가 Redo Log Buffer의 내용을 온라인 Redo Log File에 기록하는 동안 서버 프로세스는 'log file sync'로 기다립니다. 기록이 끝나면 잠금이 풀리고 사용자에게 \"Commit complete\"가 돌아갑니다."],
+ ["p","**STEP 7. 나중에 DBWn이 반영** — 더티 블록은 체크포인트, 빈 버퍼 부족 같은 별도 조건이 생길 때 DBWn이 데이터파일에 씁니다. COMMIT과는 직접 연결되지 않습니다."],
+ ["tbl",[["누가","무엇을"],["서버 프로세스","파싱, 데이터파일 → Buffer Cache 읽기, 잠금, Undo 생성, Redo Log Buffer 기록, 블록 수정"],["LGWR","Redo Log Buffer → 온라인 Redo Log File 기록 (커밋을 확정시키는 쪽)"],["DBWn","더티 버퍼(Buffer Cache) → 데이터파일 기록"],["CKPT","체크포인트 정보(SCN)를 컨트롤파일·데이터파일 헤더에 기록, DBWn에 쓰기 신호"]]],
+ ["tip","\"커밋이 느려요\"라는 문의를 받으면 AWR에서 'log file sync'와 'log file parallel write'(LGWR의 실제 쓰기 시간)를 같이 보세요. 둘 다 높으면 Redo 디스크 I/O, 'log file sync'만 높으면 커밋 횟수가 너무 많은 애플리케이션을 의심합니다."]
+]},
+{ id:"arch-7", title:"SELECT와 읽기 일관성", min:5, body:[
+ ["p","SELECT도 STEP 1(파싱)과 STEP 2(블록 확보)는 UPDATE와 같습니다. 다른 점은 데이터를 바꾸지 않는다는 것, 그리고 '쿼리를 시작한 시점'의 데이터를 보여준다는 것입니다."],
+ ["ul",["쿼리가 시작될 때의 SCN이 기준점이 됩니다.","블록에 그 이후의 변경이나 아직 커밋되지 않은 변경이 있으면, Undo를 거꾸로 적용해 기준 시점의 블록 복사본(CR 블록)을 만들어 읽습니다.","그래서 다른 세션이 UPDATE 중이어도 SELECT는 기다리지 않고 커밋된 예전 값을 봅니다 — 읽기는 쓰기를 막지 않고, 쓰기도 읽기를 막지 않습니다.","SELECT는 행 잠금을 걸지 않습니다 (SELECT ... FOR UPDATE는 예외)."]],
+ ["p","변경이 없으니 SELECT는 보통 Redo도, 더티 버퍼도 만들지 않습니다. 다만 대량 UPDATE 직후에 SELECT를 하면 앞선 트랜잭션의 흔적을 블록에서 정리하는 '지연 블록 정리(delayed block cleanout)' 때문에 SELECT가 약간의 Redo를 만들 수도 있습니다."],
+ ["warn","쿼리가 오래 걸리는 동안 필요한 Undo가 다른 트랜잭션에 덮어써지면 CR 블록을 만들 수 없어 ORA-01555(snapshot too old)가 납니다. UNDO_RETENTION과 Undo 테이블스페이스 크기, 그리고 쿼리 자체의 수행 시간을 함께 봐야 합니다."]
+]},
+{ id:"arch-8", title:"정전이 나면? 인스턴스 복구와 Write-Ahead", min:5, body:[
+ ["p","상황: COMMIT 직후, DBWn이 데이터파일에 반영하기 전에 서버 전원이 나갔습니다."],
+ ["ul",["메모리(Buffer Cache)의 350은 사라집니다.","데이터파일에는 아직 300입니다.","하지만 온라인 Redo Log File에는 \"300 → 350, 커밋됨\"이 남아 있습니다."]],
+ ["p","다음 기동 때 오라클은 인스턴스 복구를 자동으로 합니다. 단일 인스턴스는 SMON이, RAC에서는 살아 있는 인스턴스가 죽은 인스턴스의 복구를 맡습니다."],
+ ["p","**STEP 1. Roll Forward (캐시 복구)** — 마지막 체크포인트 이후의 Redo를 모두 다시 적용합니다. 이때는 커밋 여부와 상관없이 전부 적용하므로, 커밋 안 된 변경과 그 변경의 Undo까지 되살아납니다."],
+ ["p","**STEP 2. OPEN** — Roll Forward가 끝나면 데이터베이스를 엽니다. 사용자는 이 시점부터 접속할 수 있습니다."],
+ ["p","**STEP 3. Roll Back (트랜잭션 복구)** — 커밋되지 않았던 트랜잭션은 Undo로 되돌립니다. 이 작업은 OPEN 이후 백그라운드에서 진행되고, 어떤 세션이 그 행에 접근하면 그 부분부터 먼저 되돌립니다."],
+ ["tip","**Write-Ahead 규칙**: 변경된 블록이 데이터파일에 써지기 전에, 그 변경에 대한 Redo가 먼저 온라인 Redo Log File에 써져 있어야 합니다. DBWn은 쓰려는 버퍼의 Redo가 아직 디스크에 없으면 LGWR에게 먼저 쓰라고 신호하고 기다립니다. 그래서 데이터파일에 커밋 안 된 값이 들어가 있어도 Redo와 Undo로 언제든 되돌릴 수 있습니다."],
+ ["p","복구 시간은 '마지막 체크포인트 이후 쌓인 Redo 양'에 비례합니다. FAST_START_MTTR_TARGET으로 목표 복구 시간을 정하면 오라클이 체크포인트를 그에 맞게 진행합니다."]
+]},
+{ id:"arch-9", title:"캐시 3종: Buffer·Library·Dictionary Cache", min:5, body:[
+ ["tbl",[["캐시","위치","담는 것","못 찾으면(Miss)"],["Buffer Cache","SGA","데이터 블록","데이터파일에서 디스크 읽기"],["Library Cache","Shared Pool","파싱된 SQL·PL/SQL, 실행계획","하드 파싱"],["Dictionary Cache (Row Cache)","Shared Pool","테이블·컬럼·권한 등 메타데이터","딕셔너리 테이블 조회 (재귀 SQL)"]]],
+ ["p","메타데이터는 '데이터에 대한 데이터'입니다. 테이블 구조, 컬럼 타입, 인덱스, 사용자 권한 같은 정보가 여기에 해당합니다."],
+ ["ul",["Library Cache·Dictionary Cache 적중률은 높을수록 좋습니다. 하드 파싱이 많으면 바인드 변수를 쓰지 않고 값을 SQL에 직접 넣는(리터럴) 애플리케이션을 먼저 의심합니다.","Buffer Cache 적중률은 높다고 무조건 좋은 게 아닙니다. 비효율적인 SQL이 같은 블록을 수백만 번 읽어도 적중률은 99%로 나옵니다. 대기 이벤트와 논리적 읽기(consistent gets) 양을 같이 봐야 합니다."]],
+ ["code","sql","-- Library Cache (SQL 영역)\nSELECT namespace, gets, gethits, ROUND(gethitratio*100,2) AS gethit_pct,\n       pins, pinhits, ROUND(pinhitratio*100,2) AS pinhit_pct, reloads, invalidations\nFROM   v$librarycache\nWHERE  namespace = 'SQL AREA';\n\n-- Dictionary Cache\nSELECT ROUND((1 - SUM(getmisses)/SUM(gets))*100, 2) AS dict_hit_pct FROM v$rowcache;\n\n-- Buffer Cache 관련 누적 통계\nSELECT name, value FROM v$sysstat\nWHERE  name IN ('db block gets','consistent gets','physical reads');"],
+ ["tip","reloads·invalidations가 계속 늘면 Shared Pool이 부족하거나 객체가 자주 재컴파일되는 상황입니다. 적중률 한 숫자보다 이런 변화량이 더 많은 걸 알려줍니다."]
+]},
+{ id:"arch-10", title:"더티 버퍼와 DBWn·LGWR의 쓰기 시점", min:5, body:[
+ ["p","더티 버퍼는 Buffer Cache에서 수정됐지만 아직 DBWn이 데이터파일에 쓰지 않은 블록입니다."],
+ ["ul",["COMMIT을 했어도 더티 상태일 수 있습니다 — Redo는 이미 온라인 Redo Log File에 있으니 안전합니다.","반대로 COMMIT 전의 변경을 DBWn이 데이터파일에 먼저 쓸 수도 있습니다 — Undo가 있으니 롤백할 수 있습니다.","DBWn이 쓰고 나면 클린 버퍼가 되어 캐시에서 밀려나도 문제없습니다."]],
+ ["p","**LGWR가 Redo Log Buffer를 파일에 쓰는 시점** (19c Concepts 기준)"],
+ ["ul",["사용자가 COMMIT할 때","온라인 Redo Log 스위치가 일어날 때","마지막 기록 후 3초가 지났을 때","Redo Log Buffer가 1/3 찼거나 1MB가 쌓였을 때","DBWn이 더티 버퍼를 쓰기 전 (Write-Ahead)"]],
+ ["p","그래서 커밋하지 않은 변경의 Redo도 위 조건에 걸리면 파일에 먼저 기록될 수 있습니다."],
+ ["p","**DBWn이 더티 버퍼를 쓰는 대표적인 시점**"],
+ ["ul",["서버 프로세스가 빈(재사용 가능한) 버퍼를 일정 개수 이상 찾지 못했을 때","체크포인트를 진행시켜야 할 때 (로그 스위치, FAST_START_MTTR_TARGET, ALTER SYSTEM CHECKPOINT)","테이블스페이스를 OFFLINE·READ ONLY로 바꾸거나 BEGIN BACKUP을 할 때 등"]],
+ ["code","bash","# 백그라운드 프로세스 확인 (oracle 계정)\nps -ef | grep -E 'ora_(dbw|ckpt|lgwr)' | grep -v grep"]
+]},
+{ id:"arch-11", title:"로그 스위치 vs 체크포인트", min:6, body:[
+ ["p","**ALTER SYSTEM SWITCH LOGFILE**은 'Redo Log Buffer를 파일에 저장하는 명령'이 아닙니다. LGWR가 지금 쓰던 그룹을 닫고 다음 그룹으로 기록 대상을 옮기는 동작입니다."],
+ ["ul",["로그 시퀀스 번호(SEQUENCE#)가 1 올라갑니다.","닫힌 그룹은 체크포인트가 끝나기 전에는 ACTIVE, 끝나면 INACTIVE가 됩니다.","로그 스위치 때마다 체크포인트가 자동으로 요청되고, 백그라운드에서 비동기로 진행됩니다.","아카이브 모드면 ARCn이 닫힌 그룹을 아카이브 로그로 복사합니다."]],
+ ["p","**ALTER SYSTEM CHECKPOINT** (전체 체크포인트)는 다음 순서로 진행되고, 끝날 때까지 프롬프트가 돌아오지 않습니다."],
+ ["ul",["① 지금까지의 Redo를 먼저 온라인 Redo Log File에 기록 (Write-Ahead)","② DBWn이 그 시점의 더티 버퍼를 모두 데이터파일에 기록","③ CKPT가 컨트롤파일과 데이터파일 헤더의 체크포인트 SCN을 갱신","④ 더 이상 복구에 필요 없는 그룹이 ACTIVE → INACTIVE"]],
+ ["tbl",[["구분","로그 스위치 체크포인트","ALTER SYSTEM CHECKPOINT"],["범위","닫힌 로그가 담고 있는 위치(RBA)까지","그 시점의 모든 더티 버퍼"],["방식","백그라운드 비동기","완료될 때까지 대기"],["목적","닫힌 그룹을 재사용 가능하게","DB 전체를 디스크에 일관되게 반영"]]],
+ ["p","RAC에서 ALTER SYSTEM CHECKPOINT는 기본이 GLOBAL이라 모든 인스턴스에서 체크포인트를 수행합니다. 내 인스턴스만 하려면 ALTER SYSTEM CHECKPOINT LOCAL을 씁니다."],
+ ["warn","alert 로그에서 로그 스위치('Thread 1 advanced to log sequence ...')는 항상 보이지만, 체크포인트 시작·완료 메시지는 LOG_CHECKPOINTS_TO_ALERT가 TRUE일 때만 남습니다. 19c 기본값은 FALSE라서 그냥 grep하면 안 나올 수 있어요."],
+ ["code","sql","-- 랩에서 체크포인트 메시지를 보고 싶을 때\nALTER SYSTEM SET log_checkpoints_to_alert = TRUE SCOPE=BOTH;\n\n-- alert 로그 위치 확인\nSELECT value FROM v$diag_info WHERE name = 'Diag Trace';"],
+ ["code","bash","# 예: PATCHDB 랩 (경로는 db_unique_name·인스턴스명에 따라 다름)\ngrep -iE 'checkpoint|advanced to log sequence' /u01/app/oracle/diag/rdbms/patchdb/PATCHDB/trace/alert_PATCHDB.log | tail -20"]
+]},
+{ id:"arch-12", title:"Redo Log 그룹 상태와 관리 실습", min:6, body:[
+ ["p","온라인 Redo Log 그룹은 다음 순서로 돌고 돕니다."],
+ ["code","text","UNUSED(신규) → CURRENT → ACTIVE → INACTIVE → (재사용) CURRENT …"],
+ ["tbl",[["상태","의미"],["CURRENT","LGWR가 지금 기록 중"],["ACTIVE","스위치로 닫혔지만 체크포인트가 끝나지 않음 — 인스턴스 복구에 필요하므로 덮어쓸 수 없음"],["INACTIVE","체크포인트 완료 — 인스턴스 복구에 필요 없음. 아카이브 모드라면 아카이브까지 끝나야 재사용"],["UNUSED","한 번도 쓰이지 않은 새 그룹"]]],
+ ["warn","스위치가 한 바퀴 돌아 다음에 쓸 그룹이 아직 ACTIVE이면 alert 로그에 'Checkpoint not complete'와 'cannot allocate new log'가 찍히고 DML이 멈칫합니다. 아카이브가 늦으면 'log file switch (archiving needed)' 대기가 생깁니다. 그룹 수나 크기를 늘리는 이유가 이것입니다."],
+ ["code","sql","-- 상태 확인\nSELECT group#, thread#, sequence#, bytes/1024/1024 AS mb, members, status, archived\nFROM   v$log ORDER BY group#;\nSELECT group#, member, status FROM v$logfile ORDER BY group#, member;\n\n-- 그룹 추가 (예: PATCHDB 단일 인스턴스 랩)\nALTER DATABASE ADD LOGFILE GROUP 4\n  ('/u01/app/oracle/oradata/PATCHDB/redo04.log') SIZE 200M;\n\n-- 멤버 추가 (다중화)\nALTER DATABASE ADD LOGFILE MEMBER\n  '/u01/app/oracle/oradata/PATCHDB/redo01b.log' TO GROUP 1;\n\n-- RAC는 스레드(인스턴스)를 지정\n-- ALTER DATABASE ADD LOGFILE THREAD 2 GROUP 6 ('+DATAC1') SIZE 1G;"],
+ ["p","**삭제 규칙**"],
+ ["ul",["인스턴스(스레드)마다 온라인 Redo Log 그룹이 최소 2개는 남아야 합니다.","그룹 삭제는 INACTIVE일 때만 됩니다. CURRENT면 ALTER SYSTEM SWITCH LOGFILE, ACTIVE면 ALTER SYSTEM CHECKPOINT로 상태를 넘깁니다.","아카이브 모드라면 ARCHIVED = YES인지도 확인합니다.","멤버 삭제는 CURRENT·ACTIVE 그룹에서는 안 되고, 그룹의 마지막 유효 멤버도 지울 수 없습니다.","DROP해도 OS 파일은 자동으로 지워지지 않습니다(OMF 제외). 확인 후 직접 rm 합니다."]],
+ ["code","sql","ALTER DATABASE DROP LOGFILE GROUP 4;\nALTER DATABASE DROP LOGFILE MEMBER '/u01/app/oracle/oradata/PATCHDB/redo01b.log';"],
+ ["tip","새로 추가한 멤버는 v$logfile.STATUS가 INVALID로 보이다가 그 그룹이 처음 쓰이면 공백으로 바뀝니다. 정상 동작이니 놀라지 마세요."]
+]},
+{ id:"arch-13", title:"SCN은 언제 올라가나", min:4, body:[
+ ["p","SCN(System Change Number)은 데이터베이스의 '시계'입니다. 계속 증가하는 숫자로, 읽기 일관성의 기준점, 체크포인트 위치, 복구 지점(UNTIL SCN)을 모두 SCN으로 표현합니다."],
+ ["ul",["커밋하면 그 트랜잭션에 커밋 SCN이 정해집니다.","DDL도 내부적으로 커밋하므로 SCN이 올라갑니다.","사용자가 아무 작업을 안 해도 SMON·MMON, 스케줄러 잡, AWR 스냅샷 같은 내부 작업 때문에 SCN은 계속 올라갑니다.","DB Link로 다른 DB와 통신하면 두 DB의 SCN 중 큰 값으로 맞춰집니다."]],
+ ["p","SELECT는 시작 시점의 SCN을 읽기 일관성 기준점으로 쓸 뿐, SCN을 올리지 않습니다."],
+ ["code","sql","SELECT current_scn FROM v$database;\nSELECT dbms_flashback.get_system_change_number FROM dual;\n\n-- 데이터파일 헤더의 체크포인트 SCN\nSELECT file#, checkpoint_change#, checkpoint_time FROM v$datafile_header;\n\n-- Redo 그룹별 SCN 범위\nSELECT group#, sequence#, first_change#, next_change#, status FROM v$log;\n\n-- 행의 마지막 변경 SCN (근사값)\nSELECT ora_rowscn, empno FROM emp;"],
+ ["warn","ORA_ROWSCN은 테이블을 ROWDEPENDENCIES로 만들지 않았으면 블록 단위로 관리되는 근사값입니다. 같은 블록의 다른 행이 바뀌어도 값이 같이 올라갈 수 있어서, 행 단위 변경 추적에 그대로 쓰면 안 됩니다."]
+]},
+{ id:"arch-14", title:"COMMIT 방식: COMMIT_LOGGING·COMMIT_WAIT", min:4, body:[
+ ["tbl",[["파라미터","값","의미"],["COMMIT_LOGGING","IMMEDIATE","커밋마다 LGWR가 Redo를 바로 기록"],["","BATCH","LGWR가 Redo를 모아서 한꺼번에 기록"],["COMMIT_WAIT","WAIT","Redo가 기록된 것을 확인한 뒤 커밋 완료 반환"],["","NOWAIT","기록 완료를 기다리지 않고 바로 반환"],["","FORCE_WAIT","WAIT 강제 — 시스템 레벨로 설정하면 세션·트랜잭션 레벨 설정을 무시"]]],
+ ["ul",["두 파라미터 모두 기본값이 '없음'입니다. 설정하지 않으면 기본 동작인 IMMEDIATE + WAIT로 커밋합니다.","show parameter에서 VALUE가 비어 있고 ISDEFAULT = TRUE면 '설정하지 않아서 기본 동작을 한다'는 뜻입니다.","COMMIT_WRITE는 두 파라미터를 합친 예전 파라미터로, 11g R1부터 deprecated(하위 호환용)입니다.","COMMIT_POINT_STRENGTH는 분산 트랜잭션(2PC)용이라 이 내용과 관계없습니다."]],
+ ["code","sql","SELECT name, value, isdefault FROM v$parameter\nWHERE  name IN ('commit_logging','commit_wait','commit_write');\n\n-- 세션·문장 단위 예 (랩에서만)\nALTER SESSION SET commit_wait = NOWAIT;\nALTER SESSION SET commit_logging = BATCH;\nCOMMIT WRITE IMMEDIATE WAIT;\nCOMMIT WRITE BATCH NOWAIT;"],
+ ["warn","NOWAIT·BATCH는 처리량을 올려 주지만, 인스턴스가 비정상 종료되면 '커밋 완료'로 응답받은 최근 트랜잭션이 사라질 수 있습니다(ACID의 Durability 포기). 정합성이 깨지지는 않지만 마지막 몇 건이 없어집니다. 운영계에서는 업무 담당자와 합의 없이 쓰면 안 됩니다."],
+ ["tip","기본 방식에서 커밋 지연은 'log file sync' 대기로 보입니다. 이 대기를 줄이려고 NOWAIT부터 떠올리기보다, 커밋 횟수와 Redo 디스크 성능을 먼저 확인하는 게 순서입니다."]
+]},
+{ id:"arch-15", title:"랩 실습: 더티 버퍼·Redo·캐시 관찰", min:6, body:[
+ ["p","랩 DB(예: PATCHDB)에서 앞 역들의 내용을 눈으로 확인해 보는 순서입니다. 운영 DB에서는 하지 마세요. 예제의 emp 테이블(SCOTT 스키마)이 없으면 실습용 테이블로 바꿔서 하면 됩니다."],
+ ["p","**STEP 1. 더티 버퍼 늘었다 줄이기**"],
+ ["code","sql","-- 세션 1\nUPDATE emp SET sal = sal WHERE deptno = 10;   -- 아직 커밋 안 함\nSELECT COUNT(*) FROM v$bh WHERE dirty = 'Y';   -- 증가\nSELECT xidusn, used_ublk, used_urec FROM v$transaction;  -- 진행 중 트랜잭션의 Undo 사용량\nCOMMIT;\nSELECT COUNT(*) FROM v$bh WHERE dirty = 'Y';   -- 커밋했어도 그대로일 수 있음\nALTER SYSTEM CHECKPOINT;\nSELECT COUNT(*) FROM v$bh WHERE dirty = 'Y';   -- 감소"],
+ ["p","**STEP 2. 스위치와 체크포인트 전후 상태 비교**"],
+ ["code","sql","SELECT group#, sequence#, status FROM v$log ORDER BY group#;\nALTER SYSTEM SWITCH LOGFILE;\nSELECT group#, sequence#, status FROM v$log ORDER BY group#;   -- 직전 그룹이 ACTIVE\nALTER SYSTEM CHECKPOINT;\nSELECT group#, sequence#, status FROM v$log ORDER BY group#;   -- INACTIVE로 바뀜"],
+ ["p","**STEP 3. 물리적 읽기 vs 캐시 적중**"],
+ ["code","sql","SET AUTOTRACE TRACEONLY STATISTICS\nSELECT * FROM emp;   -- 처음: physical reads 발생 가능\nSELECT * FROM emp;   -- 두 번째: consistent gets 위주 (캐시 적중)\nSET AUTOTRACE OFF\n\n-- ALTER SYSTEM FLUSH BUFFER_CACHE;  -- 랩에서만. 운영 DB에서는 전체 성능에 큰 영향"],
+ ["p","**STEP 4. 커밋 대기 관찰**"],
+ ["code","sql","SELECT event, total_waits, ROUND(time_waited_micro/1000) AS ms\nFROM   v$system_event\nWHERE  event IN ('log file sync','log file parallel write');"],
+ ["tip","SQL 탭의 실습 DB에도 V$LOG가 들어 있어요. 'CURRENT 리두 그룹' 문제로 상태 컬럼 읽는 연습을 해 보세요."]
+]}
+  ];
+  // arch-2(백그라운드 프로세스) 다음에 끼워 넣기
+  var at = 0; arch.lessons.forEach(function (l, i) { if (l.id === "arch-2") at = i + 1; });
+  Array.prototype.splice.apply(arch.lessons, [at, 0].concat(L));
+
+  var REF = {
+    "arch-5": [["Database Concepts 19c · Memory Architecture", D + "cncpt/memory-architecture.html"], ["Database Concepts 19c · Process Architecture", D + "cncpt/process-architecture.html"]],
+    "arch-6": [["Database Concepts 19c · Transactions", D + "cncpt/transactions.html"], ["Database Concepts 19c · Process Architecture (LGWR·DBW)", D + "cncpt/process-architecture.html"], ["Database Concepts 19c · Data Concurrency and Consistency (Locks)", D + "cncpt/data-concurrency-and-consistency.html"]],
+    "arch-7": [["Database Concepts 19c · Data Concurrency and Consistency", D + "cncpt/data-concurrency-and-consistency.html"]],
+    "arch-8": [["Database Concepts 19c · Oracle Database Instance (Instance Recovery)", D + "cncpt/oracle-database-instance.html"], ["Database Concepts 19c · Process Architecture (Write-Ahead)", D + "cncpt/process-architecture.html"]],
+    "arch-9": [["Database Concepts 19c · Memory Architecture (Shared Pool)", D + "cncpt/memory-architecture.html"], ["Database Reference 19c · V$LIBRARYCACHE", D + "refrn/V-LIBRARYCACHE.html"]],
+    "arch-10": [["Database Concepts 19c · Process Architecture", D + "cncpt/process-architecture.html"]],
+    "arch-11": [["SQL Language Reference 19c · ALTER SYSTEM", D + "sqlrf/ALTER-SYSTEM.html"], ["Database Reference 19c · LOG_CHECKPOINTS_TO_ALERT", D + "refrn/LOG_CHECKPOINTS_TO_ALERT.html"]],
+    "arch-12": [["Administrator's Guide 19c · Managing the Redo Log", D + "admin/managing-the-redo-log.html"], ["Database Reference 19c · V$LOGFILE", D + "refrn/V-LOGFILE.html"]],
+    "arch-13": [["Database Concepts 19c · Transactions (SCN)", D + "cncpt/transactions.html"], ["SQL Language Reference 19c · ORA_ROWSCN", D + "sqlrf/ORA_ROWSCN-Pseudocolumn.html"]],
+    "arch-14": [["Database Reference 19c · COMMIT_LOGGING", D + "refrn/COMMIT_LOGGING.html"], ["Database Reference 19c · COMMIT_WAIT", D + "refrn/COMMIT_WAIT.html"]],
+    "arch-15": [["Database Reference 19c · V$BH", D + "refrn/V-BH.html"], ["Database Reference 19c · V$LOG", D + "refrn/V-LOG.html"]]
+  };
+  L.forEach(function (l) { if (REF[l.id]) l.ref = REF[l.id]; });
+
+  // 퀴즈는 기존 문제 뒤에 추가 (문제 번호 = 기록 ID 유지)
+  arch.quiz = arch.quiz.concat([
+    { q: "UPDATE 후 COMMIT이 완료됐다. 이 시점에 반드시 디스크에 기록되어 있는 것은?", o: ["변경된 데이터 블록(데이터파일)", "해당 트랜잭션의 Redo(온라인 Redo Log File)", "Undo 블록(데이터파일)", "체크포인트 SCN(컨트롤파일)"], a: 1, e: "커밋 확정은 Redo가 온라인 Redo Log File에 기록됐다는 뜻입니다. 데이터 블록은 더티 버퍼로 남아 있다가 나중에 DBWn이 씁니다." },
+    { q: "Redo Log Buffer에 Redo 엔트리를 써 넣는 주체는?", o: ["LGWR", "서버 프로세스", "DBWn", "CKPT"], a: 1, e: "Redo Log Buffer를 채우는 것은 변경을 만든 서버 프로세스입니다. LGWR는 그 버퍼를 온라인 Redo Log File로 옮겨 씁니다." },
+    { q: "Buffer Cache에 없는 블록을 데이터파일에서 읽어 오는 주체는?", o: ["DBWn", "서버 프로세스", "LGWR", "SMON"], a: 1, e: "읽기는 서버 프로세스가 직접 합니다. DBWn은 반대 방향(Buffer Cache → 데이터파일) 쓰기만 담당합니다." },
+    { q: "'log file sync' 대기 이벤트가 뜻하는 것은?", o: ["DBWn이 데이터파일에 쓰기를 기다림", "커밋한 세션이 LGWR의 Redo 기록 완료를 기다림", "아카이브 완료를 기다림", "체크포인트 완료를 기다림"], a: 1, e: "커밋한 서버 프로세스는 LGWR가 커밋 Redo를 온라인 Redo Log File에 쓸 때까지 'log file sync'로 기다립니다." },
+    { q: "Write-Ahead 규칙으로 옳은 것은?", o: ["데이터 블록을 쓰기 전에 그 변경의 Redo가 먼저 디스크에 있어야 한다", "Redo를 쓰기 전에 데이터 블록이 먼저 디스크에 있어야 한다", "Undo는 Redo로 보호되지 않는다", "커밋하면 DBWn이 즉시 데이터파일에 쓴다"], a: 0, e: "DBWn은 쓰려는 버퍼의 Redo가 아직 디스크에 없으면 LGWR에게 먼저 쓰게 하고 기다립니다." },
+    { q: "인스턴스 복구의 순서로 옳은 것은?", o: ["Roll Back → Roll Forward → OPEN", "Roll Forward → OPEN → 미커밋 트랜잭션 Roll Back", "OPEN → Roll Forward → Roll Back", "Roll Forward만 하고 Roll Back은 DBA가 수동으로"], a: 1, e: "마지막 체크포인트 이후 Redo를 모두 적용(Roll Forward)한 뒤 DB를 열고, 커밋되지 않은 트랜잭션은 OPEN 이후 Undo로 되돌립니다." },
+    { q: "ALTER SYSTEM SWITCH LOGFILE 직후, 방금 닫힌 그룹의 V$LOG.STATUS로 가장 흔한 값은?", o: ["CURRENT", "ACTIVE", "UNUSED", "CLEARING"], a: 1, e: "닫힌 그룹은 체크포인트가 끝나기 전까지 ACTIVE이고, 끝나면 INACTIVE가 됩니다." },
+    { q: "온라인 Redo Log 그룹을 DROP할 수 있는 상태는? (아카이브 모드)", o: ["CURRENT", "ACTIVE", "INACTIVE이면서 ARCHIVED = YES", "상태와 관계없이 언제나"], a: 2, e: "그룹 삭제는 INACTIVE일 때만 되고, 아카이브 모드라면 아카이브까지 끝나 있어야 합니다. 스레드마다 최소 2개 그룹은 남아야 합니다." },
+    { q: "Redo 멤버를 새로 추가했더니 V$LOGFILE.STATUS가 INVALID로 보인다. 맞는 해석은?", o: ["파일이 손상됐으니 즉시 DROP", "정상 — 그 그룹이 처음 쓰이면 공백으로 바뀐다", "ASM에서만 생기는 버그", "DB를 재기동해야 한다"], a: 1, e: "새 멤버는 아직 한 번도 쓰이지 않아 INVALID로 보이다가, 해당 그룹이 사용되면 공백(사용 중)으로 바뀝니다." },
+    { q: "19c에서 LOG_CHECKPOINTS_TO_ALERT의 기본값은?", o: ["TRUE", "FALSE", "AUTO", "기본값 없음"], a: 1, e: "기본값은 FALSE입니다. 그래서 기본 설정에서는 체크포인트 시작·완료 메시지가 alert 로그에 남지 않습니다." },
+    { q: "COMMIT_WAIT = NOWAIT의 위험으로 옳은 것은?", o: ["데이터 블록이 손상된다", "인스턴스 장애 시 커밋 완료로 응답받은 최근 트랜잭션이 유실될 수 있다", "Undo가 생성되지 않는다", "RAC에서는 설정할 수 없다"], a: 1, e: "Redo 기록 완료를 기다리지 않고 반환하므로, 그 사이 장애가 나면 커밋 응답을 받은 트랜잭션이 사라질 수 있습니다(Durability 포기)." },
+    { q: "ROWDEPENDENCIES 없이 만든 테이블에서 ORA_ROWSCN 값의 단위는?", o: ["행 단위 정확한 값", "블록 단위 근사값", "테이블 단위", "세그먼트 단위"], a: 1, e: "기본은 블록 단위로 관리되어 같은 블록의 다른 행이 바뀌어도 값이 같이 올라갈 수 있습니다." },
+    { q: "Library Cache에서 같은 SQL을 찾지 못했을 때 일어나는 일은?", o: ["소프트 파싱", "하드 파싱", "물리적 읽기", "로그 스위치"], a: 1, e: "공유 SQL 영역을 재사용하지 못하면 실행계획을 새로 만드는 하드 파싱이 일어납니다." },
+    { q: "다른 세션이 UPDATE 중(미커밋)인 행을 SELECT하면?", o: ["커밋될 때까지 기다린다", "Undo로 만든 커밋된 예전 값을 바로 읽는다", "ORA-00054 에러", "미커밋 값을 읽는다"], a: 1, e: "읽기 일관성 덕분에 SELECT는 기다리지 않고, Undo로 쿼리 시작 시점의 커밋된 값을 만들어 읽습니다." }
+  ]);
+})();
