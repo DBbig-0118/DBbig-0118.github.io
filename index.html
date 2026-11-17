@@ -215,6 +215,12 @@ details.fold .in{padding:0 14px 12px}
 .cbox .tn{font:600 13px var(--mono);color:var(--info)}
 .cbox .cols{font:12px/1.7 var(--mono);color:var(--tx2)}
 @media (min-width:640px){ main{padding-left:20px;padding-right:20px} }
+.abx{color:var(--tx2);font-weight:400}
+.gl{padding:4px 14px}
+.gli{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+.gli:last-child{border-bottom:0}
+.glk{font:600 14px var(--mono);min-width:66px;color:var(--brand);padding-top:1px;word-break:break-all}
+.glf{font-weight:600;margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -228,6 +234,7 @@ details.fold .in{padding:0 14px 12px}
 <script src="problems.js"></script>
 <script src="engine.js"></script>
 <script src="schema.js"></script>
+<script src="glossary.js"></script>
 <script src="app.js"></script>
 <script>
 if ("serviceWorker" in navigator) { window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); }); }

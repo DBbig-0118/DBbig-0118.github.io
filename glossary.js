@@ -1,0 +1,123 @@
+/* 디비빅SQL — 약어 사전
+   k: 대표 약어(같은 k는 한 레슨·문제에서 한 번만 풀어 씀)
+   f: 풀어쓴 이름(본문에 "약어(f)" 형태로 표시)
+   d: 초보자용 한 줄 설명
+   g: 분류  m: 본문에서 찾을 표기들(기본 [k])  c: 이 노선(카테고리)에서만 적용
+   h: 사전 목록에서 숨김(같은 약어의 보조 항목)
+   백그라운드 프로세스 이름은 Oracle Database Reference "Background Processes" 표(Expanded Name)와
+   19c Concepts를 기준으로 하고, 본문에서는 끝의 "Process"를 생략했습니다. */
+window.DBBIG_GLOSSARY = [
+  /* ── 백그라운드 프로세스 ── */
+  { k: "PMON", f: "Process Monitor", g: "bg", d: "다른 프로세스의 비정상 종료를 감지. 19c부터 실제 정리는 CLMN에 맡김" },
+  { k: "CLMN", f: "Cleanup Main", g: "bg", d: "종료된 프로세스·세션의 자원 정리를 수행하고 CLnn에 일을 나눔" },
+  { k: "CLnn", f: "Cleanup Helper", g: "bg", d: "CLMN을 도와 정리 작업을 병렬로 처리 (Reference 표기: Cleanup Slave Process)" },
+  { k: "SMON", f: "System Monitor", g: "bg", d: "기동 시 인스턴스 복구, 사용하지 않는 임시 세그먼트 정리" },
+  { k: "DBWn", f: "Database Writer", g: "bg", m: ["DBWn", "DBW0", "DBW"], d: "버퍼 캐시의 변경된(dirty) 블록을 데이터파일에 기록" },
+  { k: "LGWR", f: "Log Writer", g: "bg", d: "리두 로그 버퍼의 내용을 온라인 리두 로그 파일에 기록. 커밋 속도를 좌우" },
+  { k: "CKPT", f: "Checkpoint", g: "bg", d: "체크포인트 정보(SCN 등)를 컨트롤파일·데이터파일 헤더에 기록하고 DBWn에 쓰기 신호" },
+  { k: "ARCn", f: "Archiver", g: "bg", m: ["ARCn", "ARC0"], d: "꽉 찬 온라인 리두 로그를 아카이브 로그로 복사 (ARCHIVELOG 모드에서 동작)" },
+  { k: "LREG", f: "Listener Registration", g: "bg", d: "인스턴스·서비스 정보를 리스너에 등록 (12c부터, 이전에는 PMON 담당)" },
+  { k: "MMON", f: "Manageability Monitor", g: "bg", d: "AWR 스냅샷 생성, 임계치 경보(alert) 같은 관리 작업" },
+  { k: "MMNL", f: "Manageability Monitor Lite", g: "bg", d: "ASH(세션 이력) 수집·메트릭 계산 같은 가볍고 잦은 관리 작업" },
+  { k: "RECO", f: "Recoverer", g: "bg", d: "분산 트랜잭션 장애로 미결(in-doubt) 상태가 된 트랜잭션을 자동 정리" },
+  { k: "LMON", f: "Global Enqueue Service Monitor", g: "bg", d: "RAC 클러스터 상태 감시, 인스턴스 장애 시 글로벌 리소스 재구성" },
+  { k: "LMS", f: "Global Cache Service", g: "bg", m: ["LMSn", "LMS"], d: "RAC 인스턴스 간 데이터 블록 전송(Cache Fusion) 처리" },
+  { k: "LMD", f: "Global Enqueue Service Daemon", g: "bg", m: ["LMDn", "LMD0", "LMD"], d: "RAC 글로벌 enqueue(락) 요청 처리, 인스턴스 간 데드락 감지" },
+  { k: "LCK0", f: "Lock Process", g: "bg", d: "RAC에서 블록 외 리소스(라이브러리 캐시·로우 캐시 등) 락 요청 처리" },
+  { k: "DIAG", f: "Diagnostic Capture", g: "bg", d: "장애 시 진단 덤프 수집" },
+  { k: "RFS", f: "Remote File Server", g: "bg", d: "Standby에서 Primary가 보낸 리두를 받아 SRL·아카이브 로그에 기록" },
+  { k: "MRP0", f: "Managed Recovery Process", g: "bg", d: "Standby에서 받은 리두를 데이터파일에 적용 (Reference 표기: Managed Standby Recovery Process)" },
+  { k: "MRP0", f: "Managed Recovery Process", g: "bg", m: ["MRP"], c: ["dg", "trouble"], h: 1 },
+  { k: "ocssd", f: "Cluster Synchronization Services Daemon", g: "rac", d: "CSS 데몬. 노드 heartbeat를 감시하고 문제 노드를 클러스터에서 축출(eviction)" },
+  { k: "crsd", f: "Cluster Ready Services Daemon", g: "rac", d: "CRS 데몬. DB·리스너·VIP 같은 클러스터 리소스를 기동·감시" },
+  { k: "ohasd", f: "Oracle High Availability Services Daemon", g: "rac", d: "GI 하위 스택(ocssd·crsd 등)을 맨 먼저 띄우고 관리하는 데몬" },
+
+  /* ── 메모리·저장 구조 ── */
+  { k: "SGA", f: "System Global Area", g: "mem", d: "인스턴스의 모든 프로세스가 공유하는 메모리(버퍼 캐시·Shared Pool·리두 로그 버퍼 등)" },
+  { k: "PGA", f: "Program Global Area", g: "mem", d: "서버 프로세스마다 따로 쓰는 메모리(정렬·해시 조인 작업 공간)" },
+  { k: "SCN", f: "System Change Number", g: "mem", d: "DB 변경 시점을 나타내는 일련번호. 복구·일관성 읽기의 기준" },
+  { k: "AMM", f: "Automatic Memory Management", g: "mem", d: "SGA와 PGA를 MEMORY_TARGET 하나로 자동 배분 (HugePages와 함께 못 씀)" },
+  { k: "ASMM", f: "Automatic Shared Memory Management", g: "mem", d: "SGA_TARGET 안에서 버퍼 캐시·Shared Pool 크기를 자동 조정" },
+  { k: "ASSM", f: "Automatic Segment Space Management", g: "mem", d: "세그먼트의 빈 블록을 비트맵으로 자동 관리 (19c 기본)" },
+  { k: "MSSM", f: "Manual Segment Space Management", g: "mem", d: "free list로 빈 블록을 관리하는 예전 방식" },
+  { k: "LMT", f: "Locally Managed Tablespace", g: "mem", d: "익스텐트 사용 여부를 데이터파일 안의 비트맵으로 관리하는 테이블스페이스" },
+  { k: "HWM", f: "High Water Mark", g: "mem", d: "세그먼트에서 한 번이라도 쓰인 블록의 경계. DELETE로는 내려가지 않음" },
+  { k: "SPFILE", f: "Server Parameter File", g: "mem", d: "서버에 두는 바이너리 파라미터 파일. ALTER SYSTEM으로 변경" },
+  { k: "PFILE", f: "Parameter File", g: "mem", d: "텍스트로 된 파라미터 파일(init<SID>.ora). 편집기로 수정" },
+  { k: "CDB", f: "Container Database", g: "mem", d: "여러 PDB를 담는 멀티테넌트 DB" },
+  { k: "PDB", f: "Pluggable Database", g: "mem", d: "CDB 안에 꽂혀 있는 개별 DB. 애플리케이션은 여기에 접속" },
+  { k: "DBID", f: "Database Identifier", g: "mem", d: "DB를 구별하는 고유 번호. 컨트롤파일을 잃었을 때 RMAN 복원에 필요" },
+  { k: "CR", f: "Consistent Read", g: "mem", d: "쿼리 시작 시점 기준으로 맞춰 만든 블록 이미지 (RAC에서는 다른 노드에서 받아오기도 함)" },
+  { k: "DML", f: "Data Manipulation Language", g: "mem", d: "INSERT·UPDATE·DELETE·MERGE처럼 데이터를 바꾸는 SQL" },
+  { k: "DDL", f: "Data Definition Language", g: "mem", d: "CREATE·ALTER·DROP·TRUNCATE처럼 객체 정의를 바꾸는 SQL (자동 커밋)" },
+  { k: "FK", f: "Foreign Key", g: "mem", d: "다른 테이블의 키를 참조하는 외래 키 제약" },
+
+  /* ── RAC·클러스터·ASM ── */
+  { k: "RAC", f: "Real Application Clusters", g: "rac", d: "여러 서버의 인스턴스가 하나의 DB를 동시에 여는 클러스터 구성" },
+  { k: "GI", f: "Grid Infrastructure", g: "rac", d: "Clusterware와 ASM을 묶은 클러스터 기반 소프트웨어 (grid 계정 홈)" },
+  { k: "ASM", f: "Automatic Storage Management", g: "rac", d: "Oracle 전용 볼륨 관리자이자 파일시스템. 디스크 그룹 단위로 관리" },
+  { k: "CRS", f: "Cluster Ready Services", g: "rac", d: "클러스터 리소스(DB·리스너·VIP 등)를 관리하는 Clusterware 서비스" },
+  { k: "CSS", f: "Cluster Synchronization Services", g: "rac", d: "노드 멤버십과 네트워크·디스크 heartbeat 관리" },
+  { k: "OCR", f: "Oracle Cluster Registry", g: "rac", d: "클러스터 리소스 구성 정보 저장소" },
+  { k: "GNS", f: "Grid Naming Service", g: "rac", d: "클러스터 안에서 이름 해석·동적 IP 할당을 맡는 서비스" },
+  { k: "SCAN", f: "Single Client Access Name", g: "rac", c: ["rac", "trouble", "exa", "arch"], d: "클라이언트가 클러스터에 접속할 때 쓰는 단일 이름 (보통 IP 3개 + SCAN 리스너 3개)" },
+  { k: "VIP", f: "Virtual IP", g: "rac", d: "노드 장애 시 살아 있는 노드로 넘어가 클라이언트에 빠른 실패를 알려주는 가상 IP" },
+  { k: "GCS", f: "Global Cache Service", g: "rac", d: "RAC 인스턴스들 사이의 데이터 블록 일관성 관리 (LMS가 수행)" },
+  { k: "GES", f: "Global Enqueue Service", g: "rac", d: "RAC 인스턴스들 사이의 enqueue(락) 조정 (LMD·LMON이 수행)" },
+
+  /* ── 백업·복구·Data Guard ── */
+  { k: "RMAN", f: "Recovery Manager", g: "bk", d: "Oracle 백업·복원·복구 도구" },
+  { k: "FRA", f: "Fast Recovery Area", g: "bk", d: "백업·아카이브 로그·플래시백 로그 같은 복구 파일 전용 영역" },
+  { k: "BCT", f: "Block Change Tracking", g: "bk", d: "변경된 블록을 파일에 기록해 증분 백업이 전체를 읽지 않게 하는 기능" },
+  { k: "PITR", f: "Point-in-Time Recovery", g: "bk", d: "특정 시점까지만 복구하는 불완전 복구 (이후 RESETLOGS로 OPEN)" },
+  { k: "SRL", f: "Standby Redo Log", g: "bk", d: "Standby가 받은 리두를 실시간으로 쓰는 로그 파일" },
+  { k: "DGMGRL", f: "Data Guard broker command-line interface", g: "bk", d: "Data Guard 브로커 명령행 도구 (switchover·failover 등)" },
+  { k: "DR", f: "Disaster Recovery", g: "bk", d: "재해 복구. 보통 원격지 Standby 시스템을 뜻함" },
+
+  /* ── 성능·진단 ── */
+  { k: "AWR", f: "Automatic Workload Repository", g: "perf", d: "성능 통계를 주기적(기본 1시간)으로 스냅샷해 저장하는 저장소" },
+  { k: "ASH", f: "Active Session History", g: "perf", d: "활성 세션 상태를 1초마다 샘플링한 기록" },
+  { k: "ADDM", f: "Automatic Database Diagnostic Monitor", g: "perf", d: "AWR 스냅샷을 분석해 성능 문제와 권고를 알려주는 기능" },
+  { k: "ADR", f: "Automatic Diagnostic Repository", g: "perf", d: "alert log·트레이스·인시던트를 모아두는 진단 디렉터리 체계" },
+  { k: "ADRCI", f: "ADR Command Interpreter", g: "perf", d: "ADR을 조회하고 SR용 패키지를 만드는 명령행 도구" },
+
+  /* ── 패치·지원 ── */
+  { k: "RU", f: "Release Update", g: "patch", d: "분기마다 나오는 누적 패치 (19.24 같은 버전 번호)" },
+  { k: "RUR", f: "Release Update Revision", g: "patch", d: "RU에 보안·회귀 수정만 더한 패치. 19.16.2(2023년 1월)를 끝으로 중단" },
+  { k: "MRP", f: "Monthly Recommended Patches", g: "patch", c: ["patch"], d: "RU 사이에 매월 나오는 권장 패치 묶음 (Linux x86-64 전용)" },
+  { k: "PSU", f: "Patch Set Update", g: "patch", c: ["patch"], d: "12.1까지 쓰던 분기 패치 방식. 12.2부터 RU로 바뀜" },
+  { k: "OJVM", f: "Oracle JavaVM", g: "patch", d: "DB 안에 내장된 Java 가상머신. 패치를 RU와 별도로 적용" },
+  { k: "MOS", f: "My Oracle Support", g: "patch", d: "Oracle 기술지원 포털 (문서·패치·SR)" },
+  { k: "SR", f: "Service Request", g: "patch", d: "Oracle 지원에 여는 기술지원 요청" },
+  { k: "DBCA", f: "Database Configuration Assistant", g: "patch", d: "DB를 만들거나 지우는 도구 (GUI·silent 모드)" },
+  { k: "OEDA", f: "Oracle Exadata Deployment Assistant", g: "hw", d: "Exadata 구성 설계와 설치를 자동화하는 도구" },
+
+  /* ── Exadata·ZFS·하드웨어 ── */
+  { k: "HCC", f: "Hybrid Columnar Compression", g: "hw", d: "행을 묶어 컬럼 단위로 압축하는 기능 (Exadata·ZFSSA 같은 Oracle 스토리지 전용)" },
+  { k: "XRMEM", f: "Exadata RDMA Memory", g: "hw", d: "스토리지 서버 메모리를 DB 서버가 RDMA로 직접 읽는 캐시 계층" },
+  { k: "RDMA", f: "Remote Direct Memory Access", g: "hw", d: "상대 서버 메모리를 CPU·OS를 거치지 않고 직접 읽고 쓰는 기술" },
+  { k: "RoCE", f: "RDMA over Converged Ethernet", g: "hw", d: "이더넷 위에서 동작하는 RDMA. X8M부터 Exadata 내부망" },
+  { k: "IB", f: "InfiniBand", g: "hw", d: "X8까지 쓰던 Exadata 내부 고속 네트워크" },
+  { k: "ILOM", f: "Integrated Lights Out Manager", g: "hw", d: "서버 전원·하드웨어 상태를 원격으로 관리하는 서비스 프로세서" },
+  { k: "IORM", f: "I/O Resource Management", g: "hw", d: "DB·카테고리별로 스토리지 I/O를 나눠 주는 Exadata 기능" },
+  { k: "ESS", f: "Exadata System Software", g: "hw", d: "Exadata DB 서버·스토리지 서버에 올라가는 시스템 소프트웨어(이미지)" },
+  { k: "HC", f: "High Capacity", g: "hw", c: ["exa"], d: "대용량 HDD + 플래시 캐시를 갖춘 표준 스토리지 서버" },
+  { k: "EF", f: "Extreme Flash", g: "hw", c: ["exa"], d: "디스크 없이 플래시로만 구성한 고성능 스토리지 서버" },
+  { k: "XT", f: "Extended", g: "hw", c: ["exa"], d: "오래 보관할 데이터용으로 가격을 낮춘 대용량 스토리지 서버" },
+  { k: "PSU", f: "Power Supply Unit", g: "hw", c: ["zfs", "exa"], d: "전원 공급 장치" },
+  { k: "ZFSSA", f: "ZFS Storage Appliance", g: "hw", d: "Oracle ZFS Storage Appliance. NAS·SAN을 함께 제공하는 스토리지" },
+  { k: "OISP", f: "Oracle Intelligent Storage Protocol", g: "hw", d: "dNFS가 I/O 요청에 힌트를 실어 ZFSSA가 레코드 크기 등을 자동 조정하게 하는 프로토콜" },
+  { k: "BUI", f: "Browser User Interface", g: "hw", d: "ZFSSA 웹 관리 화면" },
+  { k: "ARC", f: "Adaptive Replacement Cache", g: "hw", c: ["zfs"], d: "ZFS가 DRAM에 두는 읽기 캐시" },
+  { k: "L2ARC", f: "Level 2 Adaptive Replacement Cache", g: "hw", d: "ARC 다음 단계로 SSD에 두는 읽기 캐시" },
+  { k: "ZIL", f: "ZFS Intent Log", g: "hw", d: "동기 쓰기를 먼저 기록하는 로그. 전용 SSD(log 장치)에 두면 지연이 줄어듦" },
+  { k: "NSPF", f: "No Single Point of Failure", g: "hw", d: "디스크 셸프 하나가 통째로 빠져도 데이터가 살아남도록 배치하는 옵션" },
+  { k: "dNFS", f: "Direct NFS", g: "hw", d: "Oracle DB에 내장된 NFS 클라이언트. OS NFS를 거치지 않아 빠름" },
+  { k: "NFS", f: "Network File System", g: "hw", d: "네트워크로 파일시스템을 공유하는 프로토콜" },
+  { k: "SMB", f: "Server Message Block", g: "hw", d: "Windows에서 주로 쓰는 파일 공유 프로토콜" },
+  { k: "NAS", f: "Network Attached Storage", g: "hw", d: "네트워크로 파일 단위 공유를 제공하는 스토리지" },
+  { k: "SAN", f: "Storage Area Network", g: "hw", d: "블록(디스크) 단위로 스토리지를 연결하는 전용 네트워크" },
+  { k: "LUN", f: "Logical Unit Number", g: "hw", d: "SAN에서 서버에 디스크처럼 보이도록 내주는 블록 단위" },
+  { k: "FC", f: "Fibre Channel", g: "hw", d: "SAN에 쓰는 고속 전송 규격" }
+];
+window.DBBIG_GLOSSARY_GROUPS = [["bg", "백그라운드 프로세스·데몬"], ["mem", "메모리·저장 구조·SQL"], ["rac", "RAC·클러스터·ASM"], ["bk", "백업·복구·Data Guard"], ["perf", "성능·진단"], ["patch", "패치·지원"], ["hw", "Exadata·ZFS·하드웨어"]];

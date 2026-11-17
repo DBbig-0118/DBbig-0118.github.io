@@ -484,7 +484,7 @@ quiz:[
 
   /* v0.0.2 추가 퀴즈 */
   var ADD = {
-    arch: [{ q: "19c 문서 기준, 비정상 종료된 프로세스의 '정리(cleanup) 작업'을 실제로 수행하는 프로세스는?", o: ["PMON 단독", "CLMN(과 CLnn 헬퍼)", "SMON", "LREG"], a: 1, e: "19c Concepts에 따르면 PMON은 비정상 종료 감지를 맡고, 정리 작업은 CLMN에 위임하며 CLMN은 다시 CLnn 헬퍼에 일을 나눕니다." },
+    arch: [{ q: "19c 문서 기준, 비정상 종료된 프로세스의 '정리(cleanup) 작업'을 실제로 수행하는 프로세스는?", o: ["PMON 단독", "CLMN과 CLnn 헬퍼", "SMON", "LREG"], a: 1, e: "19c Concepts에 따르면 PMON은 비정상 종료 감지를 맡고, 정리 작업은 CLMN에 위임하며 CLMN은 다시 CLnn 헬퍼에 일을 나눕니다." },
            { q: "LGWR가 리두를 기록하는 시점으로 19c Concepts에 '없는' 것은?", o: ["커밋 시", "온라인 리두 로그 스위치 시", "SMON이 임시 세그먼트를 정리할 때", "리두 버퍼가 1/3 또는 1MB 찼을 때"], a: 2, e: "커밋, 로그 스위치, 마지막 기록 후 3초, 버퍼 1/3 또는 1MB, DBW가 쓰기 전 — 이 다섯 가지가 문서에 나온 시점입니다." }],
     asm: [{ q: "Failure Group 전체가 장애일 때 적용되는 FAILGROUP_REPAIR_TIME의 기본값은?", o: ["3.6시간", "8.5시간", "12시간", "24시간"], a: 3, e: "19c ASM 가이드: FAILGROUP_REPAIR_TIME 기본값은 24h입니다. 개별 디스크는 DISK_REPAIR_TIME을 따릅니다." }],
     patch: [{ q: "19c RUR(Release Update Revision)에 대한 설명으로 옳은 것은?", o: ["지금도 분기마다 2개씩 나온다", "2023년 1월 19.16.2를 마지막으로 중단됐다", "MRP와 같은 것이다", "Windows 전용이다"], a: 1, e: "RUR은 19.17(2022년 10월)부터 더 나오지 않았고, 19.16.2(2023년 1월)가 마지막입니다. 대신 Linux x86-64용 MRP가 도입됐습니다." },
