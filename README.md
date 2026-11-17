@@ -1,4 +1,4 @@
-# 디비빅SQL 설치형 패키지 (v0.0.4)
+# 디비빅SQL 설치형 패키지 (v0.0.5)
 
 claude.ai 링크 없이 폰에 앱처럼 설치해서 쓰는 버전입니다.
 앱 파일이 기기에 저장되므로 지하철에서 데이터가 끊겨도 레슨·퀴즈·SQL 실습이 동작합니다.
@@ -8,12 +8,24 @@ claude.ai 링크 없이 폰에 앱처럼 설치해서 쓰는 버전입니다.
 | 기능 | claude.ai 버전 | 설치형 |
 |---|---|---|
 | 레슨·퀴즈·SQL 실습 | O | O (오프라인 가능) |
-| AI 코치 / AI 문제 생성 | O | X (Claude 연결 필요) |
+| AI 튜터·AI 코치·AI 문제 생성 | O (Claude 계정) | O (내 Claude API 키, 선택) |
 | 계정 동기화 | O | X (기기 저장) |
 | 듣기 | Claude 음성 | 폰 내장 음성 |
 | 홈 화면 아이콘 | claude.ai 아이콘 | 아바타 아이콘 |
 
 학습 기록 옮기기: claude.ai 버전 ⚙️ 설정 → 학습 기록 백업 "복사" → 설치형 ⚙️ 설정 → "붙여넣기"
+
+## AI 기능 켜기 (설치형, 선택)
+
+설치형은 claude.ai 밖에서 돌기 때문에 **내 Claude API 키**로 AI를 씁니다. 키는 폰(브라우저)에만 저장되고 GitHub·백업에 들어가지 않으며, 질문할 때만 토큰이 과금됩니다.
+
+STEP 1. PC에서 https://platform.claude.com (Claude Console) 로그인 — claude.ai 구독과 별도
+STEP 2. Settings → Billing 에서 크레딧 충전 (Max·Ultra 요금제는 Console 조직을 연결하면 월 API 크레딧 제공, Pro는 미포함)
+STEP 3. Workspace를 하나 만들고 월 Spend limit 설정 (예: $5) — 기본 Workspace에는 한도 설정 불가
+STEP 4. 그 Workspace에서 API Keys → Create Key → 키 복사 (sk-ant- 로 시작)
+STEP 5. 앱 ⚙️ 설정 → AI (Claude API) → 키 넣기 → 테스트
+
+비용 감(질문 1,500토큰 + 답변 800토큰): Sonnet 5.5 약 1센트, Haiku 5.5 약 0.06센트
 
 ---
 

@@ -1,5 +1,5 @@
 /* 디비빅SQL 서비스 워커 — 앱 파일을 기기에 저장해 지하철(오프라인)에서도 동작 */
-var CACHE = "dbbigsql-v0.0.4";
+var CACHE = "dbbigsql-v0.0.5";
 var FILES = ["./", "./index.html", "./app.js", "./content.js", "./problems.js", "./engine.js", "./schema.js", "./glossary.js",
   "./sql-asm.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-512-full.png","./privacy.html"];
 self.addEventListener("install", function (e) {
