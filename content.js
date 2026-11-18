@@ -856,3 +856,159 @@ exa: { lessons: [
     c.quiz = c.quiz.concat(MORE[id].quiz);   // 기존 문제 뒤에 추가 (문제 번호 = 기록 ID 유지)
   });
 })();
+
+/* ───────── v0.0.9 업그레이드·이관 노선 + 실무 레슨 + 문서 기반 퀴즈 ─────────
+   실무 참고: 내맘대로긍정 블로그(positivemh.tistory.com) — 레슨 본문은 19c 공식 문서·MOS 기준으로 새로 작성하고 원문 링크만 연결 */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var B = "https://positivemh.tistory.com/";
+  var MOS = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+
+  /* ── 13호선: 업그레이드·이관 ── */
+  C.push({ id:"mig", name:"업그레이드·이관", icon:"🚚", desc:"AutoUpgrade·롤백 계획·RMAN·Data Pump·콜드 백업",
+lessons:[
+{ id:"mig-1", title:"업그레이드·이관 방법 고르기", min:5, body:[
+ ["p","버전을 올리는 '업그레이드'와 서버를 옮기는 '이관'은 같이 일어나는 경우가 많습니다. 다운타임, 데이터 크기, 원본 버전, 플랫폼(OS·엔디언)이 방법을 정합니다."],
+ ["tbl",[["방법","언제 쓰나","특징"],["AutoUpgrade","같은 서버(또는 같은 스토리지)에서 버전만 올릴 때","19c 권장 도구. 사전 점검·Fixup·업그레이드·사후 작업을 자동화"],["RMAN 백업셋 복원 후 업그레이드","새 서버로 옮기면서 버전도 올릴 때 (같은 플랫폼)","새 홈에서 복원·복구 → OPEN RESETLOGS UPGRADE → dbupgrade"],["Data Pump (expdp/impdp)","플랫폼이 다르거나, 스키마 단위로 정리하며 옮길 때","가장 유연하지만 데이터가 크면 느림"],["콜드 백업 복사","같은 버전·같은 플랫폼으로 서버만 바꿀 때","DB를 내리고 파일을 그대로 복사. 단순하지만 다운타임이 김"],["Transportable Tablespace","대용량 + 다른 엔디언","데이터파일을 옮기고 메타데이터만 Data Pump로 이동"]]],
+ ["ul",["19c로 직접 업그레이드할 수 있는 원본 버전은 11.2.0.4, 12.1.0.2, 12.2.0.1, 18c입니다. 그보다 낮으면 중간 버전을 거치거나 Data Pump를 씁니다.","19c부터 non-CDB 구조는 deprecated(21c부터 미지원)라서, 업그레이드하면서 PDB로 바꾸는 계획도 같이 세웁니다.","어떤 방법이든 '되돌리는 방법(롤백)'과 '검증 방법'을 먼저 정해 두고 시작합니다."]],
+ ["tip","방법을 고를 때 가장 먼저 물을 것은 '허용 다운타임이 몇 시간인가'입니다. 몇 시간이 허용되면 AutoUpgrade·RMAN 방식, 몇 분만 허용되면 Data Guard·GoldenGate 같은 복제 기반 전환을 검토합니다."]
+]},
+{ id:"mig-2", title:"AutoUpgrade 따라하기", min:7, body:[
+ ["p","AutoUpgrade는 19c 홈의 $ORACLE_HOME/rdbms/admin/autoupgrade.jar에 들어 있지만, 오라클은 MOS 2485457.1에서 최신 jar를 받아 쓰라고 권합니다. 원본은 11.2.0.4 이상이어야 합니다."],
+ ["code","text","# /home/oracle/upg/upg.cfg  (예: 11.2.0.4 → 19c, 같은 서버)\nglobal.autoupg_log_dir=/home/oracle/upg/logs\n\nupg1.sid=ORCL\nupg1.source_home=/u01/app/oracle/product/11.2.0.4/dbhome_1\nupg1.target_home=/u01/app/oracle/product/19.0.0/dbhome_1\nupg1.start_time=NOW\nupg1.upgrade_node=localhost\n# non-CDB를 PDB로 바꾸며 올리려면 (대상 CDB가 미리 있어야 함)\n# upg1.target_cdb=CDB19"],
+ ["code","bash","# oracle 계정 — 19c 홈의 Java로 실행\nexport TGT=/u01/app/oracle/product/19.0.0/dbhome_1\n\n# STEP 1. 분석만 (DB 변경 없음)\n$TGT/jdk/bin/java -jar /home/oracle/upg/autoupgrade.jar -config /home/oracle/upg/upg.cfg -mode analyze\n\n# STEP 2. 업그레이드 전 자동 조치(Fixup)\n$TGT/jdk/bin/java -jar /home/oracle/upg/autoupgrade.jar -config /home/oracle/upg/upg.cfg -mode fixups\n\n# STEP 3. 실제 업그레이드 (사전 점검·Fixup·업그레이드·사후 작업까지)\n$TGT/jdk/bin/java -jar /home/oracle/upg/autoupgrade.jar -config /home/oracle/upg/upg.cfg -mode deploy\n\n# 실행 중 콘솔 명령\n#   upg> lsj            작업 목록\n#   upg> status -job 100   작업 상세"],
+ ["ul",["analyze 결과는 autoupg_log_dir 아래 <sid>/<작업번호>/prechecks 의 HTML·로그에서 확인합니다. ERROR로 나온 항목은 deploy 전에 반드시 해결합니다.","Enterprise Edition에서 deploy는 기본적으로 보장 복원 지점(GRP)을 만들고 업그레이드합니다. 문제가 생기면 그 지점으로 되돌릴 수 있습니다.","모드는 analyze · fixups · deploy · upgrade · postfixups가 있습니다. upgrade 모드는 새 홈에서 이미 UPGRADE 모드로 연 DB를 올릴 때(예: RMAN으로 옮겨 온 DB) 씁니다."]],
+ ["warn","deploy가 끝나도 COMPATIBLE은 자동으로 올라가지 않습니다. 업무 검증이 끝나기 전에 COMPATIBLE을 올리면 GRP로 되돌릴 수도, 다운그레이드할 수도 없게 됩니다."]
+]},
+{ id:"mig-3", title:"업그레이드 롤백 계획: GRP와 COMPATIBLE", min:5, body:[
+ ["p","업그레이드 작업계획서에는 '실패하면 어떻게 원래대로 돌리는가'가 반드시 들어가야 합니다. 대표적인 수단은 보장 복원 지점(GRP)입니다."],
+ ["code","sql","-- 원본 DB(구버전 홈)에서 업그레이드 전에\nCREATE RESTORE POINT before_upg GUARANTEE FLASHBACK DATABASE;\nSELECT name, scn, guarantee_flashback_database FROM v$restore_point;"],
+ ["p","**되돌리는 순서** (업그레이드 후 문제가 생겼을 때)"],
+ ["ul",["STEP 1. 새 홈(19c)에서 DB를 SHUTDOWN IMMEDIATE","STEP 2. 새 홈에서 STARTUP MOUNT 후 FLASHBACK DATABASE TO RESTORE POINT before_upg;","STEP 3. 다시 SHUTDOWN → 환경 변수·/etc/oratab을 구버전 홈으로 되돌림","STEP 4. 구버전 홈에서 STARTUP MOUNT → ALTER DATABASE OPEN RESETLOGS;","STEP 5. 정상 확인 후 DROP RESTORE POINT before_upg;"]],
+ ["ul",["COMPATIBLE을 올린 뒤에는 그 이전 시점의 GRP로 Flashback할 수 없습니다. 그래서 COMPATIBLE 변경은 '되돌릴 필요가 없다'고 확인된 뒤 마지막에 합니다.","GRP는 FRA에 Flashback 로그를 계속 쌓습니다. 업그레이드 후 안정화 기간 동안 FRA 여유 공간을 매일 확인하고, 끝나면 꼭 지웁니다.","GRP는 Enterprise Edition 기능입니다. Standard Edition이라면 업그레이드 직전의 전체 백업(콜드 백업 또는 RMAN)이 롤백 수단입니다."]],
+ ["tip","작업계획서의 롤백 STEP은 실제로 랩에서 한 번 해 본 명령만 적으세요. 블로그 '내맘대로긍정'에 11g → 19c 업그레이드 후 restore point로 되돌리는 테스트가 단계별로 정리되어 있어 연습할 때 참고하기 좋습니다."]
+]},
+{ id:"mig-4", title:"RMAN 백업셋으로 옮기며 업그레이드", min:7, body:[
+ ["p","구버전 서버의 RMAN 백업을 새 서버(19c 홈만 설치된 상태)로 가져가 복원한 뒤, 그 자리에서 업그레이드하는 방식입니다. 같은 플랫폼(예: Linux x86-64 → Linux x86-64)이어야 합니다."],
+ ["p","◎ 원본 서버 (구버전)"],
+ ["code","bash","# STEP 1. 업그레이드 사전 점검 (19c의 preupgrade.jar를 구버전 홈 Java로 실행)\n$ORACLE_HOME/jdk/bin/java -jar /tmp/preupgrade.jar TERMINAL TEXT\n#  → preupgrade_fixups.sql 은 원본에서 실행, postupgrade_fixups.sql 은 업그레이드 후 실행\n\n# STEP 2. 전체 백업 + 아카이브 + 컨트롤파일 + spfile\nrman target / <<'EOF'\nBACKUP AS COMPRESSED BACKUPSET DATABASE FORMAT '/backup/db_%U' PLUS ARCHIVELOG FORMAT '/backup/arc_%U';\nBACKUP CURRENT CONTROLFILE FORMAT '/backup/cf_%U';\nBACKUP SPFILE FORMAT '/backup/sp_%U';\nEOF"],
+ ["p","◎ 대상 서버 (19c 홈)"],
+ ["code","bash","# STEP 3. 백업 파일 복사 후, 19c 홈 환경으로 NOMOUNT (pfile은 경로·파라미터를 새 서버에 맞게 수정)\nsqlplus / as sysdba <<'EOF'\nSTARTUP NOMOUNT PFILE='/home/oracle/initORCL.ora';\nEOF\n\n# STEP 4. 컨트롤파일 복원 → MOUNT → 백업 등록 → 복원·복구\nrman target / <<'EOF'\nRESTORE CONTROLFILE FROM '/backup/cf_xxxx';\nALTER DATABASE MOUNT;\nCATALOG START WITH '/backup/' NOPROMPT;\nRUN {\n  SET NEWNAME FOR DATABASE TO '/u02/oradata/ORCL/%b';\n  RESTORE DATABASE;\n  SWITCH DATAFILE ALL;\n  RECOVER DATABASE;\n}\nEOF\n#  RECOVER 끝에 '아카이브 없음' 메시지가 나오는 것은 정상 (가진 아카이브까지 적용)"],
+ ["code","sql","-- STEP 5. Redo 파일 경로를 새 서버에 맞게 바꾼 뒤 업그레이드 모드로 OPEN\nALTER DATABASE RENAME FILE '/old/redo01.log' TO '/u02/oradata/ORCL/redo01.log';\nALTER DATABASE OPEN RESETLOGS UPGRADE;"],
+ ["code","bash","# STEP 6. 업그레이드 실행 (19c)\n$ORACLE_HOME/bin/dbupgrade -n 4 -l /home/oracle/upg_logs\n\n# STEP 7. 사후 작업\nsqlplus / as sysdba <<'EOF'\nSTARTUP;\n@?/rdbms/admin/utlrp.sql\n@/tmp/postupgrade_fixups.sql\nEOF"],
+ ["tip","dbupgrade 대신 AutoUpgrade의 upgrade 모드를 써도 됩니다(UPGRADE 모드로 열린 DB 대상). 타임존 파일 업그레이드(DBMS_DST)와 통계 수집도 사후 작업 목록에 넣으세요."]
+]},
+{ id:"mig-5", title:"Data Pump 이관 실무 옵션", min:6, body:[
+ ["p","Data Pump는 버전·플랫폼이 달라도 쓸 수 있는 가장 유연한 이관 도구입니다. 대용량일수록 옵션이 시간과 안정성을 좌우합니다."],
+ ["code","bash","# 원본 (expdp)\nexpdp system DIRECTORY=DP_DIR DUMPFILE=app_%U.dmp FILESIZE=20G \\\n  LOGFILE=exp_app.log SCHEMAS=APP PARALLEL=8 \\\n  EXCLUDE=STATISTICS METRICS=YES LOGTIME=ALL \\\n  FLASHBACK_TIME=SYSTIMESTAMP\n#  RAC에서 덤프가 로컬 디스크면 CLUSTER=N 추가\n\n# 대상 (impdp)\nimpdp system DIRECTORY=DP_DIR DUMPFILE=app_%U.dmp LOGFILE=imp_app.log \\\n  PARALLEL=8 METRICS=YES LOGTIME=ALL \\\n  REMAP_TABLESPACE=APP_DATA:APP_DATA19 \\\n  TRANSFORM=DISABLE_ARCHIVE_LOGGING:Y"],
+ ["tbl",[["옵션","효과"],["PARALLEL + %U","여러 프로세스·여러 덤프 파일로 병렬 처리"],["EXCLUDE=STATISTICS","통계를 빼고 옮긴 뒤 대상에서 새로 수집 (가져오기 시간 단축)"],["FLASHBACK_TIME=SYSTIMESTAMP","업무 중 export해도 한 시점 기준으로 일관된 데이터"],["METRICS=YES, LOGTIME=ALL","객체별 소요 시간과 타임스탬프를 로그에 남김 — 다음 리허설 시간 산정에 필수"],["TRANSFORM=DISABLE_ARCHIVE_LOGGING:Y","import 중 테이블·인덱스 Redo를 줄여 속도 향상 (FORCE LOGGING DB에서는 효과 없음)"],["VERSION=11.2","더 낮은 버전 DB로 가져갈 덤프를 만들 때"]]],
+ ["warn","DISABLE_ARCHIVE_LOGGING으로 가져온 데이터는 import 직후 백업 전까지 미디어 복구로 되살릴 수 없습니다. import가 끝나면 바로 전체 백업을 받으세요."],
+ ["tip","import 후에는 객체 수·INVALID 객체·행 수(주요 테이블)를 원본과 비교하는 검증 SQL을 미리 준비해 두면 이관 리허설마다 그대로 재사용할 수 있습니다."]
+]},
+{ id:"mig-6", title:"콜드 백업으로 서버 이관", min:5, body:[
+ ["p","같은 버전·같은 플랫폼으로 서버만 바꿀 때 쓰는 가장 단순한 방법입니다. DB를 정상 종료하고 파일을 그대로 복사합니다."],
+ ["p","◎ 원본 서버"],
+ ["code","sql","-- STEP 1. 옮길 파일 목록 저장\nSELECT name FROM v$datafile UNION ALL\nSELECT name FROM v$tempfile UNION ALL\nSELECT member FROM v$logfile UNION ALL\nSELECT name FROM v$controlfile;\nCREATE PFILE='/backup/initORCL.ora' FROM SPFILE;\nALTER DATABASE BACKUP CONTROLFILE TO TRACE AS '/backup/cf_trace.sql';\n\n-- STEP 2. 일관된 상태로 종료 (ABORT 금지)\nSHUTDOWN IMMEDIATE;"],
+ ["code","bash","# STEP 3. 데이터파일·컨트롤파일·Redo·패스워드 파일(orapwORCL) 복사\nrsync -av /u02/oradata/ORCL/ newsrv:/u02/oradata/ORCL/\nscp $ORACLE_HOME/dbs/orapwORCL newsrv:$ORACLE_HOME/dbs/"],
+ ["p","◎ 대상 서버 (같은 버전·같은 RU 홈)"],
+ ["code","sql","-- 경로가 같으면 바로 STARTUP. 경로가 다르면 MOUNT 후 파일 위치 변경\nSTARTUP MOUNT PFILE='/home/oracle/initORCL.ora';   -- control_files 경로는 새 위치로 수정\nALTER DATABASE RENAME FILE '/old/path/users01.dbf' TO '/u02/oradata/ORCL/users01.dbf';\nALTER DATABASE OPEN;\nCREATE SPFILE FROM PFILE='/home/oracle/initORCL.ora';"],
+ ["ul",["대상 홈의 RU가 원본보다 높다면 OPEN 후 datapatch를 실행합니다.","리스너·tnsnames·/etc/oratab·크론(백업 스크립트) 같은 DB 밖 설정도 체크리스트에 넣습니다.","DB 이름이나 DBID를 바꿔야 하면 nid 유틸리티를 씁니다."]],
+ ["tip","파일 수가 많으면 RENAME 대신 STEP 1에서 만든 컨트롤파일 trace의 CREATE CONTROLFILE 문(NORESETLOGS)에서 경로만 바꿔 실행하는 편이 빠릅니다."]
+]}],
+quiz:[
+ { q: "19c로 '직접' 업그레이드할 수 없는 원본 버전은?", o: ["11.2.0.4", "12.1.0.2", "12.2.0.1", "11.2.0.3"], a: 3, e: "19c 직접 업그레이드 원본은 11.2.0.4, 12.1.0.2, 12.2.0.1, 18c입니다. 11.2.0.3은 중간 버전을 거쳐야 합니다." },
+ { q: "AutoUpgrade에서 DB를 바꾸지 않고 사전 점검만 하는 모드는?", o: ["deploy", "analyze", "upgrade", "postfixups"], a: 1, e: "analyze는 읽기 전용 점검입니다. fixups는 사전 조치, deploy는 실제 업그레이드까지 수행합니다." },
+ { q: "업그레이드 후 COMPATIBLE을 바로 올리면 생기는 문제는?", o: ["DB가 OPEN되지 않는다", "업그레이드 전 GRP로 되돌리거나 다운그레이드할 수 없게 된다", "리스너가 내려간다", "아카이브가 꺼진다"], a: 1, e: "COMPATIBLE을 올린 뒤에는 그 이전 시점으로 Flashback할 수 없고 다운그레이드도 막힙니다. 검증이 끝난 뒤 마지막에 올립니다." },
+ { q: "RMAN으로 새 19c 서버에 복원한 구버전 DB를 여는 명령은?", o: ["ALTER DATABASE OPEN;", "ALTER DATABASE OPEN RESETLOGS UPGRADE;", "STARTUP UPGRADE NOMOUNT;", "ALTER DATABASE OPEN READ ONLY;"], a: 1, e: "불완전 복구 후이므로 RESETLOGS, 그리고 새 버전 홈에서 여는 것이므로 UPGRADE 모드로 엽니다. 이후 dbupgrade(또는 AutoUpgrade upgrade 모드)를 실행합니다." },
+ { q: "Data Pump에서 업무 중 export해도 한 시점 기준의 일관된 데이터를 얻는 옵션은?", o: ["CONTENT=DATA_ONLY", "FLASHBACK_TIME=SYSTIMESTAMP", "PARALLEL=8", "COMPRESSION=ALL"], a: 1, e: "FLASHBACK_TIME(또는 FLASHBACK_SCN)으로 export 기준 시점을 고정합니다." },
+ { q: "impdp의 TRANSFORM=DISABLE_ARCHIVE_LOGGING:Y 사용 후 꼭 해야 할 일은?", o: ["통계 삭제", "import 직후 전체 백업", "DB 재생성", "아카이브 모드 해제"], a: 1, e: "Redo를 줄여 가져온 데이터는 백업 전까지 미디어 복구로 되살릴 수 없으므로 바로 백업합니다." },
+ { q: "콜드 백업 이관 전 원본 DB를 내릴 때 써야 하는 종료 방법은?", o: ["SHUTDOWN ABORT", "SHUTDOWN IMMEDIATE", "kill -9 pmon", "ALTER SYSTEM SUSPEND"], a: 1, e: "파일을 그대로 복사해 바로 열려면 일관된(consistent) 상태여야 합니다. ABORT는 인스턴스 복구가 필요한 상태로 남깁니다." }
+]});
+
+  /* ── 기존 노선 실무 레슨 ── */
+  var MORE = {
+patch: [
+{ id:"patch-7", title:"비활성 패치 정리 (deleteinactivepatches)", min:5, body:[
+ ["p","RU를 여러 번 적용한 홈은 $ORACLE_HOME/.patch_storage에 롤백용 파일이 계속 쌓입니다. 용량도 커지고, 새 RU를 적용할 때 충돌 검사도 느려집니다. OPatch 12.2.0.1.37부터 비활성(inactive) 패치를 정리하는 기능이 들어갔습니다(MOS 2942102.1)."],
+ ["code","bash","# 홈 소유자 계정 — DB를 내리지 않고 실행 가능\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch version          # 12.2.0.1.37 이상인지\ndu -sh /u01/app/oracle/product/19.0.0/dbhome_1/.patch_storage\n\n# 지울 대상 미리보기\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch util listorderedinactivepatches\n\n# 보존 개수 설정 확인 (기본 1 = 바로 직전 RU 하나는 남김)\ngrep RETAIN_INACTIVE_PATCHES /u01/app/oracle/product/19.0.0/dbhome_1/OPatch/config/opatch.properties\n\n# 정리 실행\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch util deleteinactivepatches -silent\n\n# 결과 확인\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch util listorderedinactivepatches\ndu -sh /u01/app/oracle/product/19.0.0/dbhome_1/.patch_storage"],
+ ["ul",["한 번 실행하면 RU 체인 하나만 정리됩니다. DB RU와 GI RU처럼 체인이 여러 개면 listorderedinactivepatches 결과를 보며 여러 번 실행합니다.","기본값(RETAIN_INACTIVE_PATCHES=1)은 직전 RU 하나로 되돌릴 수 있게 남깁니다. 지운 RU로는 opatch rollback을 할 수 없으니, 롤백 정책에 맞게 값을 정하세요.","실행 전 홈 백업(tar)을 받아 두는 것이 안전합니다."]],
+ ["tip","블로그 '내맘대로긍정'의 테스트(19.22→19.28 누적 후 정리)에서는 .patch_storage가 약 16GB에서 4.7GB로 줄고, 다음 RU의 opatch apply 시간도 15분대에서 10분대로 줄었습니다. RU가 많이 쌓인 운영 홈일수록 효과가 큽니다."]
+]}],
+arch: [
+{ id:"arch-16", title:"19c에서 달라진 것들 (실무 관점)", min:5, body:[
+ ["p","19c는 12c Release 2 계열의 마지막 장기 지원(Long Term) 릴리스입니다. 현장에서 자주 부딪히는 변화만 추렸습니다."],
+ ["ul",["Standard Edition 2에서 RAC를 더 이상 지원하지 않습니다. SE2 RAC를 쓰던 곳은 19c로 올리기 전에 EE RAC 또는 단일 인스턴스(SE High Availability 포함)로 바꿔야 합니다.","GI 설치 시 GIMR(MGMTDB)이 선택 사항이 되었습니다.","non-CDB 구조는 deprecated입니다. 21c부터는 CDB만 지원하므로 19c 기간에 PDB 전환을 계획합니다.","AutoUpgrade가 기본 업그레이드 도구가 되었습니다.","Active Data Guard에서 Standby에 들어온 DML을 Primary로 넘겨 처리하는 DML Redirection이 추가되었습니다(ADG 라이선스).","Hybrid Partitioned Table로 일부 파티션을 외부 파일에 둘 수 있습니다."]],
+ ["p","**Exadata(및 Oracle Cloud)에서만 쓸 수 있는 19c 기능**"],
+ ["ul",["Automatic Indexing — 실행되는 SQL을 보고 인덱스를 자동으로 만들고 검증·삭제 (DBMS_AUTO_INDEX)","Real-Time Statistics — 일반 DML 중에도 통계를 실시간으로 보강","SQL Quarantine — Resource Manager가 끊은 폭주 SQL 실행계획을 격리해 다시 돌지 않게 함","High-Frequency Automatic Statistics Collection — 자동 통계 수집을 더 자주"]],
+ ["warn","이 기능들은 Exadata가 아닌 일반 EE에서 숨김 파라미터로 켜서 테스트할 수는 있어도 라이선스상 운영 사용은 안 됩니다. 고객사가 'Automatic Indexing 써도 되나요?'라고 물으면 장비가 Exadata인지부터 확인하세요."]
+]}],
+rac: [
+{ id:"rac-7", title:"Linux 8·9에 19c 설치할 때 체크포인트", min:5, body:[
+ ["p","19.3 설치 이미지는 OL/RHEL 8·9가 나오기 전에 만들어져서, 그대로 설치하면 OS 검사에서 막히거나 알려진 버그를 만납니다. 설치하면서 RU를 같이 적용하는 것이 표준입니다."],
+ ["ul",["OL/RHEL 9는 19c 19.19 RU부터 인증되었고, 19c Release Notes는 OL/RHEL 9에서 19.22 이상 설치를 권장합니다. GI·RAC는 DB 단일 설치와 RPM 요구사항이 달라 별도 문서를 확인합니다.","OL/RHEL 8도 19.3 이미지 그대로보다는 최신 RU를 같이 적용해 설치합니다."]],
+ ["code","bash","# ◎ 1번 노드, grid 계정 (GI 홈에 19.3 이미지를 풀어 둔 상태)\n# 설치 프로그램이 OS 버전을 인식하지 못할 때 배포판을 지정\nexport CV_ASSUME_DISTID=OL8      # 관례: OL/RHEL 8에서는 OL7, OL/RHEL 9에서는 OL8로 지정하는 경우가 많음\n\n# OPatch를 최신으로 바꾼 뒤, 설치와 동시에 RU 적용\ncd /u01/app/19.0.0/grid\n./gridSetup.sh -applyRU /u01/patch/<GI_RU_DIR>\n\n# DB 홈 (oracle 계정)\ncd /u01/app/oracle/product/19.0.0/dbhome_1\n./runInstaller -applyRU /u01/patch/<DB_RU_DIR>"],
+ ["tip","설치 전에 cluvfy(runcluvfy.sh stage -pre crsinst)로 노드 간 SSH·DNS·NTP·공유 디스크를 먼저 점검하면, 설치 도중 INS-로 시작하는 에러를 크게 줄일 수 있습니다. '내맘대로긍정' 블로그에 OL 9.6 + 19c RAC 설치 과정과 설치 중 만난 INS·CRS 에러 해결 글이 정리되어 있어 랩 구축 때 참고하기 좋습니다."]
+]}]
+  };
+  var REF = {
+    "mig-1": [["Database Upgrade Guide 19c", D + "upgrd/index.html"], ["참고 블로그 · 내맘대로긍정 — 오라클 19c New Features", B + "726"]],
+    "mig-2": [["Database Upgrade Guide 19c · AutoUpgrade Command-Line Parameters", D + "upgrd/autoupgrade-command-line-parameters.html"], ["MOS 2485457.1 · AutoUpgrade Tool", MOS + "2485457.1"], ["참고 블로그 · 내맘대로긍정 — 18c → 19c AutoUpgrade 가이드", B + "540"]],
+    "mig-3": [["Backup and Recovery User's Guide 19c · Flashback Database and Restore Points", D + "bradv/using-flasback-database-restore-points.html"], ["참고 블로그 · 내맘대로긍정 — 11g to 19c 업그레이드 시 restore point 이용 복원", B + "1280"]],
+    "mig-4": [["Database Upgrade Guide 19c", D + "upgrd/index.html"], ["참고 블로그 · 내맘대로긍정 — 11gR2 → 19c RMAN 백업셋 이용 업그레이드", B + "736"], ["참고 블로그 · 내맘대로긍정 — 11gR2 ASM RAC → 19c ASM RAC 업그레이드", B + "1234"], ["참고 블로그 · 내맘대로긍정 — preupgrade.jar 사용법", B + "1233"]],
+    "mig-5": [["Database Utilities 19c · Data Pump Export·Import", D + "sutil/index.html"]],
+    "mig-6": [["Administrator's Guide 19c · Managing Control Files", D + "admin/managing-control-files.html"]],
+    "patch-7": [["MOS 2942102.1 · OPatch 12.2.0.1.37+ Delete Inactive Patches", MOS + "2942102.1"], ["참고 블로그 · 내맘대로긍정 — 오라클 19c OPatch 이용 비활성 패치 제거", B + "1383"]],
+    "arch-16": [["Database New Features Guide 19c", D + "newft/index.html"], ["참고 블로그 · 내맘대로긍정 — 오라클 19c New Features", B + "726"]],
+    "rac-7": [["Database Release Notes 19c · Issues Affecting Linux", D + "rnrdm/linux-platform-issues.html"], ["MOS 2982833.1 · 19c on OL9/RHEL9 요구사항", MOS + "2982833.1"]]
+  };
+  cat("mig").lessons.forEach(function (l) { if (REF[l.id]) l.ref = REF[l.id]; });
+  Object.keys(MORE).forEach(function (id) { var c = cat(id); MORE[id].forEach(function (l) { if (REF[l.id]) l.ref = REF[l.id]; c.lessons.push(l); }); });
+
+  /* ── 퀴즈 추가 (각 노선 기존 문제 뒤에 — 기록 ID 유지) ── */
+  var QZ = {
+patch: [
+ { q: "OPatch로 .patch_storage의 비활성 패치를 정리하는 명령은?", o: ["opatch util cleanup", "opatch util deleteinactivepatches", "opatch rollback -all", "opatch lspatches -clean"], a: 1, e: "OPatch 12.2.0.1.37부터 opatch util deleteinactivepatches로 비활성 패치를 정리할 수 있습니다(MOS 2942102.1)." },
+ { q: "RETAIN_INACTIVE_PATCHES 기본값 1의 의미는?", o: ["비활성 패치를 모두 지운다", "가장 최근 비활성 패치 하나는 롤백용으로 남긴다", "하루에 한 번만 실행된다", "GI 홈만 정리한다"], a: 1, e: "기본값은 직전 RU 하나로 되돌릴 수 있도록 비활성 패치 1개를 남깁니다." }
+],
+arch: [
+ { q: "19c에서 지원이 중단된 구성은?", o: ["EE RAC", "SE2 RAC", "EE 단일 인스턴스", "Active Data Guard"], a: 1, e: "19c부터 Standard Edition 2의 RAC는 지원되지 않습니다." },
+ { q: "19c Automatic Indexing을 라이선스상 운영에서 쓸 수 있는 환경은?", o: ["모든 EE", "Exadata(및 Oracle Cloud의 Exadata 기반 서비스)", "SE2", "XE"], a: 1, e: "Automatic Indexing·Real-Time Statistics·SQL Quarantine은 Exadata(EE-ES)와 Exadata 기반 클라우드에서만 사용할 수 있습니다." }
+],
+rac: [
+ { q: "OL/RHEL 9에서 19c가 인증된 최소 RU는?", o: ["19.3", "19.11", "19.19", "19.30"], a: 2, e: "19.19부터 인증되었고, Release Notes는 19.22 이상 설치를 권장합니다." },
+ { q: "GI 설치와 동시에 RU를 적용하는 gridSetup.sh 옵션은?", o: ["-patch", "-applyRU", "-silent", "-executeConfigTools"], a: 1, e: "./gridSetup.sh -applyRU <RU 디렉터리>로 설치 전에 RU를 홈에 먼저 적용합니다." },
+ { q: "RAC의 기본 SCAN 리스너 개수는?", o: ["1개", "2개", "3개", "노드 수만큼"], a: 2, e: "SCAN은 보통 IP 3개로 구성되고 SCAN 리스너도 3개가 클러스터 노드에 나뉘어 뜹니다." },
+ { q: "클러스터 인터커넥트·퍼블릭 네트워크 인터페이스 설정을 확인하는 명령은?", o: ["oifcfg getif", "olsnodes -s", "srvctl config scan", "crsctl query css votedisk"], a: 0, e: "oifcfg getif로 인터페이스별 용도(public / cluster_interconnect)를 확인합니다." }
+],
+trouble: [
+ { q: "ORA-04031이 뜻하는 것은?", o: ["Shared Pool 등 SGA 영역에서 메모리를 할당하지 못함", "TEMP 부족", "아카이브 공간 부족", "리스너 미기동"], a: 0, e: "ORA-04031은 공유 메모리(주로 Shared Pool·Large Pool) 할당 실패입니다. 리터럴 SQL에 의한 단편화도 흔한 원인입니다." },
+ { q: "ADRCI에서 특정 인시던트를 SR용으로 묶는 명령은?", o: ["show alert -tail 50", "ips pack incident <번호> in /tmp", "purge -age 1440", "set homepath"], a: 1, e: "ips pack incident <번호> in <디렉터리>로 인시던트 관련 트레이스를 zip 패키지로 만듭니다." },
+ { q: "ORA-00257(archiver error) 상태에서 일반 사용자 접속이 어떻게 되나?", o: ["정상 접속", "아카이브 공간이 확보될 때까지 새 작업이 막힌다", "DB가 자동 재기동된다", "읽기 전용으로 바뀐다"], a: 1, e: "아카이브를 쓸 수 없으면 로그 스위치가 멈춰 DML이 진행되지 않습니다. RMAN으로 백업 후 정리하거나 FRA를 늘립니다." }
+],
+dg: [
+ { q: "Standby Redo Log(SRL) 그룹 수 권장 기준은?", o: ["온라인 Redo 그룹 수와 같게", "스레드마다 온라인 Redo 그룹 수 + 1", "1개면 충분", "아카이브 로그 수만큼"], a: 1, e: "Data Guard 문서는 스레드마다 온라인 Redo 그룹보다 하나 더 많은 SRL 그룹을 권장합니다." },
+ { q: "Primary에 FORCE LOGGING을 켜는 이유는?", o: ["성능 향상", "NOLOGGING 작업도 Redo를 남겨 Standby에 반영되게 하려고", "아카이브 용량 절감", "SRL 생성용"], a: 1, e: "NOLOGGING으로 처리된 변경은 Redo가 없어 Standby에 넘어가지 않습니다. FORCE LOGGING으로 이를 막습니다." },
+ { q: "12c 이후 RECOVER MANAGED STANDBY DATABASE DISCONNECT의 기본 적용 방식은?", o: ["아카이브 단위 적용만", "Real-Time Apply (SRL에서 바로 적용)", "적용하지 않음", "Logical Apply"], a: 1, e: "12c부터는 USING CURRENT LOGFILE을 쓰지 않아도 기본이 Real-Time Apply입니다." }
+],
+sec: [
+ { q: "Unified Auditing의 감사 기록을 조회하는 뷰는?", o: ["DBA_AUDIT_TRAIL", "UNIFIED_AUDIT_TRAIL", "V$SESSION", "DBA_FGA_AUDIT_TRAIL"], a: 1, e: "Unified Auditing 기록은 UNIFIED_AUDIT_TRAIL 뷰로 조회합니다." },
+ { q: "원격에서 SYSDBA로 접속할 수 있게 해 주는 파일은?", o: ["spfile", "패스워드 파일(orapw<SID>)", "sqlnet.ora", "tnsnames.ora"], a: 1, e: "원격 SYSDBA 인증은 패스워드 파일로 합니다(REMOTE_LOGIN_PASSWORDFILE = EXCLUSIVE 기본)." }
+],
+space: [
+ { q: "UNDO_RETENTION의 기본값은?", o: ["300초", "900초", "3600초", "0"], a: 1, e: "기본 900초(15분)입니다. 자동 Undo 관리에서는 공간이 허락하면 그보다 길게 보존하기도 합니다." },
+ { q: "TEMP를 지금 사용 중인 세션을 찾는 뷰는?", o: ["V$TEMPSEG_USAGE", "DBA_TEMP_FILES", "V$UNDOSTAT", "DBA_FREE_SPACE"], a: 0, e: "V$TEMPSEG_USAGE(V$SORT_USAGE)를 V$SESSION과 조인해 어떤 세션·SQL이 TEMP를 쓰는지 봅니다." }
+],
+asm: [
+ { q: "ASM NORMAL 이중화는 데이터를 몇 벌로 저장하나?", o: ["1벌", "2벌", "3벌", "디스크 수만큼"], a: 1, e: "NORMAL은 2-way, HIGH는 3-way 미러링입니다." },
+ { q: "ASM 디스크가 일시적으로 OFFLINE됐을 때 DROP되기 전까지 기다리는 기본 시간(DISK_REPAIR_TIME)은?", o: ["1시간", "3.6시간", "12시간", "24시간"], a: 1, e: "기본 3.6시간입니다. 그 안에 디스크가 돌아오면 변경분만 재동기화합니다." }
+],
+perf: [
+ { q: "AWR 스냅샷의 기본 수집 주기와 보존 기간은?", o: ["30분 / 7일", "60분 / 8일", "15분 / 30일", "60분 / 31일"], a: 1, e: "기본은 60분마다 수집하고 8일간 보존합니다. DBMS_WORKLOAD_REPOSITORY.MODIFY_SNAPSHOT_SETTINGS로 바꿉니다." },
+ { q: "'db file sequential read' 대기가 주로 뜻하는 것은?", o: ["Full Scan의 멀티블록 읽기", "인덱스 등을 통한 단일 블록 읽기", "Redo 쓰기", "TEMP 쓰기"], a: 1, e: "sequential read는 단일 블록 읽기(주로 인덱스 경로), scattered read는 멀티블록 읽기(Full Scan)입니다." }
+]
+  };
+  QZ.mig = [];
+  Object.keys(QZ).forEach(function (id) { var c = cat(id); if (c && QZ[id].length) c.quiz = c.quiz.concat(QZ[id]); });
+})();

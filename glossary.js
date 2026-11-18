@@ -63,6 +63,7 @@ window.DBBIG_GLOSSARY = [
   { k: "CRS", f: "Cluster Ready Services", g: "rac", d: "클러스터 리소스(DB·리스너·VIP 등)를 관리하는 Clusterware 서비스" },
   { k: "CSS", f: "Cluster Synchronization Services", g: "rac", d: "노드 멤버십과 네트워크·디스크 heartbeat 관리" },
   { k: "OLR", f: "Oracle Local Registry", g: "rac", d: "각 노드에 있는 로컬 레지스트리. GI 하위 스택을 띄우는 데 필요한 정보 저장" },
+  { k: "GIMR", f: "Grid Infrastructure Management Repository", g: "rac", d: "클러스터 상태 이력을 저장하는 관리용 DB(MGMTDB). 19c부터 설치 선택 사항" },
   { k: "OCR", f: "Oracle Cluster Registry", g: "rac", d: "클러스터 리소스 구성 정보 저장소" },
   { k: "GNS", f: "Grid Naming Service", g: "rac", d: "클러스터 안에서 이름 해석·동적 IP 할당을 맡는 서비스" },
   { k: "SCAN", f: "Single Client Access Name", g: "rac", c: ["rac", "trouble", "exa", "arch"], d: "클라이언트가 클러스터에 접속할 때 쓰는 단일 이름 (보통 IP 3개 + SCAN 리스너 3개)" },
@@ -78,6 +79,7 @@ window.DBBIG_GLOSSARY = [
   { k: "PITR", f: "Point-in-Time Recovery", g: "bk", d: "특정 시점까지만 복구하는 불완전 복구 (이후 RESETLOGS로 OPEN)" },
   { k: "SRL", f: "Standby Redo Log", g: "bk", d: "Standby가 받은 리두를 실시간으로 쓰는 로그 파일" },
   { k: "DGMGRL", f: "Data Guard broker command-line interface", g: "bk", d: "Data Guard 브로커 명령행 도구 (switchover·failover 등)" },
+  { k: "ADG", f: "Active Data Guard", g: "bk", d: "Standby를 읽기 전용으로 열어 쓰면서 Redo를 계속 적용하는 Data Guard 옵션(별도 라이선스)" },
   { k: "DR", f: "Disaster Recovery", g: "bk", d: "재해 복구. 보통 원격지 Standby 시스템을 뜻함" },
 
   /* ── 성능·진단 ── */
@@ -95,6 +97,8 @@ window.DBBIG_GLOSSARY = [
   { k: "MRP", f: "Monthly Recommended Patches", g: "patch", c: ["patch"], d: "RU 사이에 매월 나오는 권장 패치 묶음 (Linux x86-64 전용)" },
   { k: "PSU", f: "Patch Set Update", g: "patch", c: ["patch"], d: "12.1까지 쓰던 분기 패치 방식. 12.2부터 RU로 바뀜" },
   { k: "OJVM", f: "Oracle JavaVM", g: "patch", d: "DB 안에 내장된 Java 가상머신. 패치를 RU와 별도로 적용" },
+  { k: "SE2", f: "Standard Edition 2", g: "patch", d: "Oracle DB 표준 에디션. 19c부터 RAC 미지원" },
+  { k: "EE", f: "Enterprise Edition", g: "patch", d: "Oracle DB 엔터프라이즈 에디션. RAC·Data Guard 등 고급 기능의 기반" },
   { k: "MOS", f: "My Oracle Support", g: "patch", d: "Oracle 기술지원 포털 (문서·패치·SR)" },
   { k: "SR", f: "Service Request", g: "patch", d: "Oracle 지원에 여는 기술지원 요청" },
   { k: "DBCA", f: "Database Configuration Assistant", g: "patch", d: "DB를 만들거나 지우는 도구 (GUI·silent 모드)" },
