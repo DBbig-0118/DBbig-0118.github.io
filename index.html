@@ -135,9 +135,10 @@ h3{font-size:15px;margin:16px 0 6px}
 .tbl{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:12px;-webkit-overflow-scrolling:touch}
 .tbl table{border-collapse:collapse;width:100%;font-size:13px}
 .tbl th,.tbl td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.tbl th{background:var(--card2);font-weight:600;white-space:nowrap}
+.tbl th{background:var(--card2);font-weight:600;white-space:normal;word-break:keep-all}
 .tbl tr:last-child td{border-bottom:0}
-.tbl td:first-child{font-weight:500;white-space:nowrap}
+.tbl td+td{overflow-wrap:anywhere}
+.tbl td:first-child{font-weight:500;white-space:normal;min-width:6.5em;max-width:42vw;word-break:keep-all;overflow-wrap:break-word}
 pre.code{position:relative;background:var(--code);color:var(--codetx);border-radius:12px;padding:12px 12px 12px;margin:12px 0;overflow-x:auto;font:calc(12.5px*var(--fs))/1.6 var(--mono);-webkit-overflow-scrolling:touch;border:1px solid #1E2530}
 pre.code .lang{position:sticky;left:0;display:inline-block;font-size:10.5px;color:#7C8696;margin-bottom:4px;letter-spacing:.5px}
 pre.code .cp{position:absolute;top:6px;right:6px;font:600 11px "IBM Plex Sans KR",sans-serif;padding:3px 8px;border-radius:7px;background:#232B37;color:#B9C2CF}

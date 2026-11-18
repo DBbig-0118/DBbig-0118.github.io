@@ -1449,3 +1449,382 @@ mig: { quiz: [
     c.quiz = c.quiz.concat(ADD[id].quiz || []);
   });
 })();
+
+/* ───────── v0.1.2 보강 ①: 아키텍처·공간·백업·RAC·ASM·패치 ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var MOS = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+/* ───── 1호선 아키텍처 ───── */
+arch: { lessons: [
+{ id:"arch-22", title:"Oracle Net 설정 파일 3종", min:5, ref:[["Net Services Administrator's Guide 19c", D + "netag/index.html"], ["Net Services Reference 19c", D + "netrf/index.html"]], body:[
+ ["tbl",[["파일","어디서 쓰나","담는 것"],["listener.ora","DB 서버 (리스너)","리스너 주소·포트, 정적 등록(SID_LIST)"],["tnsnames.ora","클라이언트 (DB 서버의 sqlplus 포함)","접속 별칭 → 호스트·포트·서비스명"],["sqlnet.ora","양쪽","인증 방식, 접속 허용 IP, 암호화, 타임아웃"]]],
+ ["p","세 파일은 기본적으로 $ORACLE_HOME/network/admin에 있고, 환경변수 TNS_ADMIN을 주면 그 디렉터리를 먼저 봅니다. RAC에서 리스너는 grid 홈이 관리하므로 listener.ora도 **grid 홈** 쪽에 있습니다."],
+ ["code","bash","# oracle 계정 — 어떤 설정 파일을 읽는지 확인\necho $TNS_ADMIN\nls -l $ORACLE_HOME/network/admin/\n\n# 별칭이 어디로 가는지 (실제 접속은 안 함)\ntnsping DBBIG\n\n# tnsnames 없이 바로 접속 (EZConnect)\nsqlplus system@//dbbig-scan.example.com:1521/OLTP_SVC\n\n# grid 계정 — 리스너 상태·등록된 서비스\nlsnrctl status\nlsnrctl services"],
+ ["code","sql","-- 인스턴스가 서비스를 어느 리스너에 등록하나 (LREG가 사용)\nSHOW PARAMETER local_listener     -- 이 노드의 VIP 리스너\nSHOW PARAMETER remote_listener    -- RAC: SCAN 리스너 (scan명:1521)\nSHOW PARAMETER service_names\nALTER SYSTEM REGISTER;            -- 즉시 다시 등록"],
+ ["tip","\"tnsping은 되는데 접속이 안 된다\"는 흔한 상황입니다. tnsping은 리스너까지만 확인하므로, 서비스가 실제로 등록돼 있는지(lsnrctl services)와 서비스명이 맞는지(ORA-12514)를 이어서 봐야 합니다."]
+]},
+{ id:"arch-23", title:"딕셔너리 뷰 읽는 법: DBA_·V$·GV$·CDB_", min:4, ref:[["Database Reference 19c · About Static Data Dictionary Views", D + "refrn/about-static-data-dictionary-views.html"], ["Database Reference 19c · About Dynamic Performance Views", D + "refrn/about-dynamic-performance-views.html"]], body:[
+ ["tbl",[["접두어","보이는 범위","예"],["USER_","내 스키마 객체","USER_TABLES"],["ALL_","내가 접근할 수 있는 객체","ALL_TABLES"],["DBA_","DB 전체 (권한 필요)","DBA_TABLES"],["CDB_","CDB의 모든 컨테이너 (CON_ID 포함)","CDB_TABLES"],["V$","이 인스턴스의 메모리·상태 (동적 성능 뷰)","V$SESSION"],["GV$","RAC 전체 인스턴스 (INST_ID 포함)","GV$SESSION"]]],
+ ["ul",["DBA_ 뷰(정적 딕셔너리)는 데이터파일에 저장된 정보라 MOUNT 상태에서는 볼 수 없습니다. V$ 뷰는 메모리 기반이라 NOMOUNT·MOUNT에서도 일부를 볼 수 있습니다.","V$ 뷰는 인스턴스를 재기동하면 누적값이 초기화됩니다(V$SYSSTAT, V$SYSTEM_EVENT 등). 장기 추이는 AWR(DBA_HIST_)로 봅니다.","RAC에서 V$SESSION은 지금 접속한 노드 것만 보여줍니다. 전체를 보려면 GV$SESSION을 쓰세요."]],
+ ["code","sql","-- 뷰 이름이 기억 안 날 때\nSELECT table_name, comments FROM dictionary WHERE table_name LIKE '%RECYCLE%';\n\n-- 동적 성능 뷰 목록\nSELECT name FROM v$fixed_table WHERE name LIKE 'V$ASM%' ORDER BY name;\n\n-- 컬럼 설명\nSELECT column_name, comments FROM dict_columns WHERE table_name = 'DBA_TABLESPACES';"],
+ ["tip","앱의 SQL 실습에서 쓰는 V$·DBA_ 뷰는 실제 이름·컬럼을 그대로 흉내 냈습니다. 문제를 풀어 둔 쿼리는 실제 DB에서도 거의 그대로 돌아가요(값만 다름)."]
+]}],
+ quiz: [
+ { q: "환경변수 TNS_ADMIN의 역할은?", o: ["리스너 포트 지정", "Net 설정 파일(tnsnames.ora 등)을 찾을 디렉터리 지정", "DB 이름 지정", "알림 로그 위치 지정"], a: 1, e: "TNS_ADMIN이 있으면 $ORACLE_HOME/network/admin 대신 그 디렉터리의 설정 파일을 읽습니다." },
+ { q: "tnsping이 성공했다는 것이 보장하는 것은?", o: ["DB 로그인 가능", "리스너까지 네트워크로 닿는다", "서비스가 등록돼 있다", "계정이 잠겨 있지 않다"], a: 1, e: "tnsping은 리스너 응답만 확인합니다. 서비스 등록·인증은 별도로 확인해야 합니다." },
+ { q: "RAC에서 인스턴스가 SCAN 리스너에 서비스를 등록하도록 지정하는 파라미터는?", o: ["LOCAL_LISTENER", "REMOTE_LISTENER", "SERVICE_NAMES", "DISPATCHERS"], a: 1, e: "REMOTE_LISTENER에 SCAN명:포트를 넣으면 LREG가 SCAN 리스너에 서비스를 등록합니다. LOCAL_LISTENER는 노드 VIP 리스너입니다." },
+ { q: "MOUNT 상태(아직 OPEN 전)에서 조회할 수 없는 것은?", o: ["V$INSTANCE", "V$DATABASE", "DBA_TABLES", "V$PARAMETER"], a: 2, e: "DBA_ 뷰는 데이터파일(SYSTEM 테이블스페이스)에 있는 딕셔너리라 OPEN 후에 볼 수 있습니다." },
+ { q: "RAC 전체 노드의 세션을 한 번에 보려면?", o: ["V$SESSION", "GV$SESSION", "DBA_SESSIONS", "CDB_SESSION"], a: 1, e: "GV$ 뷰는 모든 인스턴스의 정보를 INST_ID와 함께 보여줍니다." }
+]},
+/* ───── 2호선 공간관리 ───── */
+space: { lessons: [
+{ id:"space-11", title:"Smallfile·Bigfile과 데이터파일 한도", min:5, ref:[["Database Reference 19c · Physical Database Limits", D + "refrn/physical-database-limits.html"], ["Administrator's Guide 19c · Bigfile Tablespaces", D + "admin/managing-tablespaces.html"]], body:[
+ ["p","작업계획서에 'MAXSIZE 32767M'이 자주 나오는 이유가 여기 있습니다. 일반(Smallfile) 테이블스페이스의 데이터파일 하나는 약 4백만(2²²) 블록까지 커질 수 있고, 블록 크기 8KB면 약 32GB입니다."],
+ ["tbl",[["구분","데이터파일 수","파일 1개 최대 (8KB 블록)"],["Smallfile (기본)","테이블스페이스당 최대 1022개","약 32GB (그래서 MAXSIZE 32767M)"],["Bigfile","1개뿐","약 32TB (2³² 블록)"]]],
+ ["code","sql","-- 파일별 최대 크기와 자동 확장 여부\nSELECT tablespace_name, file_name, ROUND(bytes/1024/1024/1024,1) gb,\n       autoextensible, ROUND(maxbytes/1024/1024/1024,1) max_gb\nFROM   dba_data_files ORDER BY tablespace_name, file_id;\n\n-- DB 전체 데이터파일 수 한도 (기본 200)\nSHOW PARAMETER db_files\nSELECT COUNT(*) FROM dba_data_files;\n\n-- Bigfile 생성과 크기 변경 (테이블스페이스 단위로)\nCREATE BIGFILE TABLESPACE hist_big DATAFILE '+DATAC1' SIZE 1T AUTOEXTEND ON NEXT 64G MAXSIZE 8T;\nALTER TABLESPACE hist_big RESIZE 2T;"],
+ ["warn","DB_FILES(기본 200)는 정적 파라미터입니다. 데이터파일을 계속 추가하다 한도에 닿으면 재기동해야 늘릴 수 있으니, 데이터파일 수가 많은 DB는 미리 여유를 확인하세요. RAC는 모든 인스턴스가 같은 값이어야 합니다."],
+ ["tip","Bigfile은 파일 관리가 단순하지만 파일 하나가 매우 커서, 백업할 때 RMAN SECTION SIZE로 나눠 병렬 처리하는 것이 사실상 필수입니다."]
+]},
+{ id:"space-12", title:"LOB 세그먼트 찾기와 이해", min:5, ref:[["SecureFiles and Large Objects Developer's Guide 19c", D + "adlob/index.html"], ["Database Reference 19c · DBA_LOBS", D + "refrn/DBA_LOBS.html"]], body:[
+ ["p","DBA_SEGMENTS에서 SYS_LOB…, SYS_IL…로 시작하는 큰 세그먼트가 보이면 LOB 데이터(사진, 문서, 긴 텍스트)와 그 인덱스입니다. 어느 테이블의 어느 컬럼인지는 DBA_LOBS로 찾습니다."],
+ ["code","sql","-- 큰 LOB 세그먼트 → 테이블·컬럼\nSELECT l.owner, l.table_name, l.column_name, l.securefile,\n       ROUND(s.bytes/1024/1024/1024,1) AS gb\nFROM   dba_lobs l JOIN dba_segments s\n       ON s.owner = l.owner AND s.segment_name = l.segment_name\nORDER  BY s.bytes DESC FETCH FIRST 10 ROWS ONLY;\n\n-- SecureFiles 기본 동작 (12c+ 기본값 PREFERRED)\nSHOW PARAMETER db_securefile"],
+ ["ul",["12c부터 새 LOB은 기본적으로 SecureFiles로 만들어집니다(DB_SECUREFILE = PREFERRED). 옛 방식은 BasicFiles입니다.","SecureFiles의 압축·중복 제거(COMPRESS, DEDUPLICATE)는 Advanced Compression 옵션, 암호화는 Advanced Security 옵션 라이선스가 필요합니다.","LOB 데이터를 DELETE해도 세그먼트 크기는 줄지 않습니다. 공간을 돌려받으려면 LOB을 다른 곳으로 옮기는(MOVE) 재구성이 필요합니다."]],
+ ["code","sql","-- LOB 재구성 (테이블 잠금이 걸리므로 작업 시간에)\nALTER TABLE app.doc_files MOVE LOB (file_data) STORE AS SECUREFILE (TABLESPACE lob_data);\n-- 이후 테이블의 인덱스 상태 확인\nSELECT index_name, status FROM dba_indexes WHERE table_owner = 'APP' AND table_name = 'DOC_FILES';"],
+ ["tip","대용량 LOB 테이블을 업무 중단 없이 재구성해야 하면 DBMS_REDEFINITION(온라인 재정의)을 검토합니다. 공간 회수 효과와 소요 시간을 테스트 환경에서 먼저 재 보세요."]
+]}],
+ quiz: [
+ { q: "8KB 블록 Smallfile 테이블스페이스에서 데이터파일 1개의 최대 크기는 약?", o: ["2GB", "32GB", "128GB", "32TB"], a: 1, e: "약 4백만(2²²) 블록 × 8KB ≈ 32GB라서 MAXSIZE 32767M을 자주 씁니다." },
+ { q: "Bigfile 테이블스페이스의 특징은?", o: ["데이터파일을 여러 개 가질 수 있다", "데이터파일이 1개이고 매우 크게(8KB 블록 기준 약 32TB) 만들 수 있다", "TEMP 전용이다", "ASM에서는 쓸 수 없다"], a: 1, e: "Bigfile은 파일 하나로 구성되며 크기 변경도 ALTER TABLESPACE … RESIZE로 테이블스페이스 단위로 합니다." },
+ { q: "DB_FILES 파라미터에 대한 설명으로 옳은 것은?", o: ["동적으로 바로 변경 가능", "DB에 열 수 있는 데이터파일 수 한도이며 정적 파라미터(기본 200)", "테이블스페이스 수 한도", "ASM 디스크 수 한도"], a: 1, e: "한도에 닿으면 데이터파일을 추가할 수 없고, 늘리려면 spfile 변경 후 재기동해야 합니다." },
+ { q: "DBA_SEGMENTS에 보이는 SYS_LOB… 세그먼트의 테이블·컬럼을 찾는 뷰는?", o: ["DBA_TAB_COLUMNS", "DBA_LOBS", "DBA_EXTENTS", "DBA_OBJECTS"], a: 1, e: "DBA_LOBS의 SEGMENT_NAME으로 DBA_SEGMENTS와 조인하면 테이블·컬럼을 알 수 있습니다." },
+ { q: "SecureFiles LOB의 압축(COMPRESS)·중복 제거(DEDUPLICATE)에 필요한 라이선스는?", o: ["기본 EE 포함", "Advanced Compression 옵션", "Partitioning 옵션", "Diagnostics Pack"], a: 1, e: "SecureFiles 압축·중복 제거는 Advanced Compression 옵션 기능입니다." }
+]},
+/* ───── 3호선 백업·복구 ───── */
+rman: { lessons: [
+{ id:"rman-11", title:"증분 백업과 Block Change Tracking", min:5, ref:[["Backup and Recovery User's Guide 19c · Incremental Backups", D + "bradv/index.html"], ["Database Reference 19c · V$BLOCK_CHANGE_TRACKING", D + "refrn/V-BLOCK_CHANGE_TRACKING.html"]], body:[
+ ["tbl",[["종류","백업 대상"],["LEVEL 0","전체 블록 (증분의 기준점)"],["LEVEL 1 차등 (기본)","직전 LEVEL 0 또는 LEVEL 1 이후 바뀐 블록"],["LEVEL 1 누적 (CUMULATIVE)","직전 LEVEL 0 이후 바뀐 블록 전부 — 복구 시 적용할 백업 수가 줄어듦"]]],
+ ["p","증분 백업은 원래 '바뀐 블록을 찾으려고' 데이터파일 전체를 읽습니다. **Block Change Tracking(BCT)**을 켜면 바뀐 블록 위치를 파일에 기록해 두고 그 부분만 읽어서 LEVEL 1 백업이 크게 빨라집니다(Enterprise Edition 기능)."],
+ ["code","sql","-- BCT 켜기·확인\nALTER DATABASE ENABLE BLOCK CHANGE TRACKING USING FILE '+DATAC1';\nSELECT status, filename, ROUND(bytes/1024/1024) mb FROM v$block_change_tracking;\n\n-- 최근 증분 백업에서 BCT를 실제로 썼나, 얼마나 읽었나\nSELECT file#, incremental_level, used_change_tracking,\n       ROUND(datafile_blocks*block_size/1024/1024/1024,1) file_gb,\n       ROUND(blocks_read*block_size/1024/1024/1024,1) read_gb,\n       completion_time\nFROM   v$backup_datafile\nWHERE  incremental_level = 1 AND completion_time > SYSDATE - 1;"],
+ ["code","rman","BACKUP INCREMENTAL LEVEL 0 DATABASE PLUS ARCHIVELOG;\nBACKUP INCREMENTAL LEVEL 1 DATABASE PLUS ARCHIVELOG;             # 차등\nBACKUP INCREMENTAL LEVEL 1 CUMULATIVE DATABASE PLUS ARCHIVELOG;  # 누적"],
+ ["ul",["BCT 파일은 RAC에서 모든 노드가 접근하는 공유 위치(ASM)에 둡니다.","Standby에서 BCT를 켜고 증분 백업을 받으려면 Active Data Guard 라이선스가 필요합니다."]],
+ ["tip","\"증분 백업인데 왜 이렇게 오래 걸리지?\"라면 V$BACKUP_DATAFILE의 USED_CHANGE_TRACKING과 BLOCKS_READ부터 보세요. NO이면서 파일 전체를 읽고 있다면 BCT가 꺼져 있거나 기준 백업과 맞지 않는 경우입니다."]
+]},
+{ id:"rman-12", title:"RMAN 속도 올리기: 채널·SECTION SIZE·압축", min:5, ref:[["Backup and Recovery Reference 19c · CONFIGURE", D + "rcmrf/index.html"], ["Database Licensing Information · Advanced Compression", "https://docs.oracle.com/en/database/oracle/oracle-database/19/dblic/Licensing-Information.html"]], body:[
+ ["code","rman","# 채널(병렬) 수 — 디스크 백업 기본값\nCONFIGURE DEVICE TYPE DISK PARALLELISM 8 BACKUP TYPE TO COMPRESSED BACKUPSET;\n\n# 큰 파일을 조각내 여러 채널이 나눠 백업 (Bigfile·대형 데이터파일에 효과적)\nBACKUP SECTION SIZE 64G DATABASE;\n\n# RAC에서 노드별로 채널을 나눠 쓰기\nRUN {\n  ALLOCATE CHANNEL c1 DEVICE TYPE DISK CONNECT 'sys/****@DBBIG1';\n  ALLOCATE CHANNEL c2 DEVICE TYPE DISK CONNECT 'sys/****@DBBIG2';\n  BACKUP INCREMENTAL LEVEL 0 DATABASE;\n}\n\n# 압축 알고리즘 (BASIC 외에는 Advanced Compression 라이선스)\nCONFIGURE COMPRESSION ALGORITHM 'BASIC';"],
+ ["code","sql","-- 지금 도는 RMAN 진행률\nSELECT sid, serial#, opname, ROUND(sofar/totalwork*100,1) pct,\n       ROUND(time_remaining/60) min_left\nFROM   v$session_longops\nWHERE  opname LIKE 'RMAN%' AND opname NOT LIKE '%aggregate%'\nAND    totalwork > 0 AND sofar <> totalwork;\n\n-- 백업 작업별 속도\nSELECT start_time, status, input_type, output_device_type,\n       input_bytes_per_sec_display, output_bytes_per_sec_display, time_taken_display\nFROM   v$rman_backup_job_details ORDER BY start_time DESC FETCH FIRST 10 ROWS ONLY;"],
+ ["tbl",[["압축","특징"],["BASIC","라이선스 불필요, 압축률 좋지만 CPU를 많이 씀"],["LOW / MEDIUM / HIGH","Advanced Compression 옵션 필요. 보통 MEDIUM이 속도·압축률 균형"]]],
+ ["tip","채널을 늘려도 빨라지지 않으면 병목이 백업 대상(네트워크·ZFS·테이프) 쪽입니다. 출력 속도(OUTPUT_BYTES_PER_SEC)가 채널 수와 상관없이 일정하면 대상 장비부터 점검하세요."]
+]}],
+ quiz: [
+ { q: "RMAN LEVEL 1 CUMULATIVE 증분 백업의 대상은?", o: ["직전 LEVEL 1 이후 바뀐 블록", "직전 LEVEL 0 이후 바뀐 모든 블록", "전체 블록", "아카이브 로그만"], a: 1, e: "누적 증분은 마지막 LEVEL 0 이후 변경분을 모두 담아 복구 시 적용할 백업 수를 줄입니다. 기본(차등)은 직전 증분 이후분만 담습니다." },
+ { q: "Block Change Tracking을 켜면 빨라지는 것은?", o: ["LEVEL 0 백업", "LEVEL 1 증분 백업", "아카이브 로그 백업", "컨트롤파일 백업"], a: 1, e: "바뀐 블록 위치를 기록해 두어 증분 백업이 데이터파일 전체를 읽지 않아도 됩니다." },
+ { q: "증분 백업이 BCT를 실제로 썼는지 확인하는 컬럼은?", o: ["V$BACKUP_SET.PIECES", "V$BACKUP_DATAFILE.USED_CHANGE_TRACKING", "V$DATABASE.FLASHBACK_ON", "V$RMAN_STATUS.STATUS"], a: 1, e: "USED_CHANGE_TRACKING이 YES면 BCT 파일을 이용해 필요한 블록만 읽은 것입니다." },
+ { q: "큰 데이터파일 하나를 여러 채널이 나눠 백업하게 하는 옵션은?", o: ["FILESPERSET", "SECTION SIZE", "MAXPIECESIZE", "DURATION"], a: 1, e: "SECTION SIZE를 주면 파일을 조각(section)으로 나눠 여러 채널이 병렬로 백업합니다(multisection backup)." },
+ { q: "라이선스 추가 없이 쓸 수 있는 RMAN 압축 알고리즘은?", o: ["LOW", "MEDIUM", "HIGH", "BASIC"], a: 3, e: "BASIC만 기본 포함입니다. LOW·MEDIUM·HIGH는 Advanced Compression 옵션이 필요합니다." }
+]},
+/* ───── 4호선 RAC·Grid ───── */
+rac: { lessons: [
+{ id:"rac-10", title:"SCAN과 VIP: 접속이 노드를 찾아가는 길", min:5, ref:[["Grid Infrastructure Installation Guide for Linux 19c · SCAN", D + "cwlin/index.html"], ["RAC Administration 19c", D + "racad/index.html"]], body:[
+ ["p","**STEP 1.** 클라이언트는 SCAN 이름(예: dbbig-scan)으로 접속합니다. DNS가 SCAN IP 3개 중 하나를 돌려줍니다."],
+ ["p","**STEP 2.** 그 IP의 SCAN 리스너가 요청한 서비스를 제공하는 인스턴스 중 부하가 적은 곳을 골라, 그 노드의 **로컬 리스너(VIP)**로 연결을 넘깁니다."],
+ ["p","**STEP 3.** 로컬 리스너가 서버 프로세스를 만들어 세션이 생깁니다. 노드가 죽으면 그 노드의 VIP가 다른 노드로 넘어가, 접속하던 클라이언트가 TCP 타임아웃을 기다리지 않고 바로 에러를 받습니다."],
+ ["code","bash","# grid 계정\n/u01/app/19.0.0/grid/bin/srvctl config scan             # SCAN 이름·IP\n/u01/app/19.0.0/grid/bin/srvctl status scan_listener    # SCAN 리스너가 어느 노드에서 도나\n/u01/app/19.0.0/grid/bin/srvctl config vip -node dbadm01\n/u01/app/19.0.0/grid/bin/srvctl status nodeapps\n\n# DNS에서 SCAN이 3개 IP로 풀리는지\nnslookup dbbig-scan.example.com"],
+ ["code","sql","SHOW PARAMETER local_listener    -- 이 노드 VIP의 리스너\nSHOW PARAMETER remote_listener   -- dbbig-scan.example.com:1521"],
+ ["warn","클라이언트 tnsnames.ora에 SCAN 대신 노드 물리 IP를 직접 적어 두면, 그 노드 장애 시 VIP 이동의 이점을 못 받고 접속이 한참 매달립니다. 접속 문자열은 SCAN + 서비스명이 원칙입니다."],
+ ["tip","SCAN 리스너 3개는 노드에 흩어져 돌아갑니다. 노드가 2대면 한 노드에 2개가 몰리는 게 정상입니다."]
+]},
+{ id:"rac-11", title:"인터커넥트 점검: oifcfg·HAIP·gc lost", min:5, ref:[["Clusterware Administration 19c · oifcfg", D + "cwadd/index.html"], ["Database Reference 19c · V$CLUSTER_INTERCONNECTS", D + "refrn/V-CLUSTER_INTERCONNECTS.html"]], body:[
+ ["p","Cache Fusion 블록은 인터커넥트(사설 네트워크)로 오갑니다. 여기가 느리거나 패킷을 잃으면 'gc …' 대기가 늘고, 심하면 노드 Eviction까지 갑니다."],
+ ["code","bash","# grid 계정 — 어떤 NIC가 public / cluster_interconnect 인가\n/u01/app/19.0.0/grid/bin/oifcfg getif\n/u01/app/19.0.0/grid/bin/oifcfg iflist -p -n\n\n# root — MTU 확인 (인터커넥트는 모든 노드·스위치가 같은 MTU여야 함)\nip -d link show | grep -E 'mtu|bond'\nping -M do -s 8972 -c 3 <상대 노드 사설 IP>   # 점보 프레임(MTU 9000) 통과 확인"],
+ ["code","sql","-- DB가 실제로 쓰는 인터커넥트 (HAIP면 169.254.x.x 주소)\nSELECT inst_id, name, ip_address, source FROM gv$cluster_interconnects;\n\n-- 블록 유실·재전송 (0이 정상, 계속 늘면 네트워크 점검)\nSELECT inst_id, name, value FROM gv$sysstat\nWHERE  name IN ('gc blocks lost', 'gc blocks corrupt', 'gc cr blocks received', 'gc current blocks received');"],
+ ["ul",["HAIP(Highly Available IP)는 여러 사설 NIC에 169.254 대역 주소를 자동으로 붙여 이중화·부하 분산하는 GI 기능입니다.","Exadata는 HAIP 대신 전용 고속 내부 네트워크(X8M부터 RoCE, 이전은 InfiniBand)를 cluster_interconnects로 씁니다.","'gc blocks lost'가 꾸준히 늘면 MTU 불일치, NIC·스위치 오류, UDP 버퍼 설정을 의심합니다."]],
+ ["tip","인터커넥트 문제는 OS 쪽 증거가 중요합니다. netstat -s의 UDP 'packet receive errors', ethtool -S의 drop·error 카운터를 OSWatcher 시점 자료와 같이 SR에 첨부하세요."]
+]},
+{ id:"rac-12", title:"클러스터 시간 동기화: CTSS와 chrony", min:4, ref:[["Clusterware Administration 19c · Cluster Time Synchronization Service", D + "cwadd/index.html"]], body:[
+ ["p","RAC 노드들의 시계가 어긋나면 로그 분석이 어려워지고 클러스터 동작에도 문제가 생길 수 있습니다. GI의 CTSS는 OS 시간 동기화(NTP·chrony)가 설정돼 있으면 **관찰(Observer) 모드**로 지켜보기만 하고, 없으면 **활성(Active) 모드**로 직접 시간을 맞춥니다."],
+ ["code","bash","# grid 계정 — CTSS 모드\n/u01/app/19.0.0/grid/bin/crsctl check ctss\n#   CRS-4700: ... Observer mode   → OS(chrony/NTP)가 시간 담당\n#   CRS-4701: ... Active mode     → CTSS가 시간 담당\n\n# root — OL8/OL9는 chronyd\nsystemctl status chronyd\nchronyc tracking        # 기준 서버와의 차이\nchronyc sources -v"],
+ ["ul",["운영계는 보통 사내 NTP 서버를 chrony로 맞추고 CTSS는 Observer 모드로 둡니다.","시간을 크게 되돌리는(뒤로 점프) 조정은 클러스터·DB에 좋지 않습니다. 차이가 크면 서서히 맞추는(slew) 방식으로 조정하는 것이 원칙입니다.","장애 분석 시 노드 간 로그 시각을 맞춰 보려면 먼저 이 시간 동기화 상태를 확인하세요."]],
+ ["tip","신규 구축 체크리스트에 'chronyd 활성화, 모든 노드 같은 NTP 서버, crsctl check ctss 결과 캡처'를 넣어 두면 인수인계 때 깔끔합니다."]
+]}],
+ quiz: [
+ { q: "SCAN 리스너가 하는 일은?", o: ["SQL을 실행한다", "요청한 서비스를 제공하는 인스턴스 중 하나를 골라 그 노드의 로컬 리스너로 연결을 넘긴다", "Redo를 전송한다", "ASM 디스크를 관리한다"], a: 1, e: "SCAN 리스너는 부하를 보고 적절한 노드의 로컬(VIP) 리스너로 리다이렉트합니다." },
+ { q: "노드 장애 시 VIP가 다른 노드로 넘어가는 이유는?", o: ["세션을 그대로 살리려고", "그 IP로 접속하던 클라이언트가 TCP 타임아웃을 기다리지 않고 바로 에러를 받게 하려고", "SCAN을 대체하려고", "라이선스 때문"], a: 1, e: "넘어간 VIP는 접속을 받아 주지 않고 즉시 거절하므로 클라이언트가 빨리 다른 주소로 재시도할 수 있습니다." },
+ { q: "인터커넥트로 쓰는 NIC 구성을 보는 GI 명령은?", o: ["srvctl config network", "oifcfg getif", "crsctl stat res", "olsnodes -i"], a: 1, e: "oifcfg getif는 각 인터페이스가 public인지 cluster_interconnect인지 보여줍니다." },
+ { q: "HAIP를 쓰는 RAC에서 GV$CLUSTER_INTERCONNECTS에 보이는 주소 대역은?", o: ["10.0.0.0/8", "169.254.x.x", "127.0.0.1", "SCAN IP"], a: 1, e: "HAIP는 사설 NIC에 169.254 대역 링크-로컬 주소를 붙여 사용합니다." },
+ { q: "crsctl check ctss 결과가 Observer mode라면?", o: ["CTSS가 직접 시간을 맞추고 있다", "OS의 NTP/chrony가 시간 동기화를 담당하고 CTSS는 지켜보기만 한다", "시간 동기화가 꺼져 있다", "노드가 클러스터에서 빠졌다"], a: 1, e: "NTP·chrony 설정이 있으면 CTSS는 Observer 모드, 없으면 Active 모드로 동작합니다." }
+]},
+/* ───── 5호선 ASM ───── */
+asm: { lessons: [
+{ id:"asm-8", title:"디스크 OFFLINE과 DISK_REPAIR_TIME", min:5, ref:[["ASM Administrator's Guide 19c · ASM Fast Mirror Resync", D + "ostmg/index.html"]], body:[
+ ["p","NORMAL·HIGH 이중화 디스크그룹에서 디스크가 잠깐 안 보이면 ASM은 곧바로 지우지 않고 OFFLINE으로 두고 기다립니다. 그 사이 바뀐 부분만 기록해 두었다가 디스크가 돌아오면 그만큼만 다시 맞춥니다(**Fast Mirror Resync**)."],
+ ["tbl",[["속성","기본값","뜻"],["DISK_REPAIR_TIME","3.6h","디스크 하나가 OFFLINE된 뒤 DROP까지 기다리는 시간"],["FAILGROUP_REPAIR_TIME","24h","실패 그룹 전체(예: Exadata 셀 하나)가 OFFLINE일 때 기다리는 시간"]]],
+ ["code","sql","-- ASM 인스턴스(grid)에서\nSELECT g.name dg, d.name disk, d.failgroup, d.mode_status, d.state, d.repair_timer\nFROM   v$asm_disk d JOIN v$asm_diskgroup g ON g.group_number = d.group_number\nWHERE  d.mode_status <> 'ONLINE';        -- REPAIR_TIMER: DROP까지 남은 초\n\nSELECT name, value FROM v$asm_attribute\nWHERE  name IN ('disk_repair_time', 'failgroup_repair_time') AND group_number = 1;\n\n-- 디스크가 돌아왔다면 다시 ONLINE (Resync 시작)\nALTER DISKGROUP datac1 ONLINE DISK datac1_cd_05_cel03;\n-- 진행 상황 (PASS: RESYNC / REBALANCE / COMPACT)\nSELECT group_number, operation, pass, state, est_minutes FROM v$asm_operation;\n\n-- 작업 시간이 길어질 것 같으면 대기 시간 연장\nALTER DISKGROUP datac1 SET ATTRIBUTE 'disk_repair_time' = '8h';"],
+ ["warn","REPAIR_TIMER가 0이 되면 ASM이 그 디스크를 DROP하고 전체 리밸런스를 시작합니다. 디스크·셀 교체 작업이 예상보다 길어지면 타이머가 끝나기 전에 연장하세요."],
+ ["tip","Exadata 셀을 재기동하면 그 셀의 그리드 디스크가 모두 OFFLINE → 복귀 후 Resync됩니다. 셀 재기동 전 확인 절차는 Exadata 노선의 '셀 롤링 재기동' 레슨을 보세요."]
+]},
+{ id:"asm-9", title:"디스크그룹 속성과 COMPATIBLE", min:4, ref:[["ASM Administrator's Guide 19c · Disk Group Attributes", D + "ostmg/index.html"]], body:[
+ ["code","sql","-- 디스크그룹 주요 속성\nSELECT g.name dg, a.name, a.value\nFROM   v$asm_attribute a JOIN v$asm_diskgroup g ON g.group_number = a.group_number\nWHERE  a.name IN ('compatible.asm', 'compatible.rdbms', 'au_size', 'content.type', 'disk_repair_time')\nORDER  BY g.name, a.name;"],
+ ["tbl",[["속성","뜻"],["compatible.asm","이 디스크그룹을 쓸 수 있는 최소 ASM 버전 (기능 사용 범위 결정)"],["compatible.rdbms","이 디스크그룹을 쓸 수 있는 최소 DB 버전"],["au_size","할당 단위(Allocation Unit). 만들 때 정하고 바꿀 수 없음 (Exadata는 보통 4MB)"],["content.type","Exadata에서 data / recovery / system 구분 — 미러 배치를 달리해 장애 내성을 높임"]]],
+ ["code","sql","-- compatible 올리기 (올리기만 가능, 내릴 수 없음)\nALTER DISKGROUP datac1 SET ATTRIBUTE 'compatible.asm'   = '19.0.0.0.0';\nALTER DISKGROUP datac1 SET ATTRIBUTE 'compatible.rdbms' = '19.0.0.0.0';"],
+ ["warn","compatible.rdbms를 올리면 그보다 낮은 버전의 DB는 그 디스크그룹을 열 수 없습니다. 같은 디스크그룹을 쓰는 옛 버전 DB(예: 11g)가 남아 있으면 절대 먼저 올리지 마세요."]
+]}],
+ quiz: [
+ { q: "ASM 디스크가 OFFLINE된 뒤 DROP까지 기다리는 기본 시간(DISK_REPAIR_TIME)은?", o: ["30분", "3.6시간", "24시간", "7일"], a: 1, e: "기본 3.6시간입니다. 실패 그룹 전체가 빠진 경우는 FAILGROUP_REPAIR_TIME(기본 24시간)을 따릅니다." },
+ { q: "OFFLINE 디스크가 DROP되기까지 남은 시간을 보는 컬럼은?", o: ["V$ASM_DISK.REPAIR_TIMER", "V$ASM_DISKGROUP.FREE_MB", "V$ASM_OPERATION.EST_MINUTES", "V$ASM_DISK.TOTAL_MB"], a: 0, e: "REPAIR_TIMER(초)가 0이 되면 디스크가 DROP되고 리밸런스가 시작됩니다." },
+ { q: "디스크가 돌아온 뒤 바뀐 부분만 다시 맞추는 ASM 기능은?", o: ["Rebalance", "Fast Mirror Resync", "Scrubbing", "Compact"], a: 1, e: "OFFLINE 동안의 변경을 추적해 두었다가 그 부분만 동기화합니다. V$ASM_OPERATION에서 PASS=RESYNC로 보입니다." },
+ { q: "ASM 디스크그룹의 au_size 속성에 대한 설명으로 옳은 것은?", o: ["언제든 변경 가능", "디스크그룹을 만들 때 정하며 이후 바꿀 수 없다", "DB 블록 크기와 같아야 한다", "TEMP에만 적용된다"], a: 1, e: "AU 크기는 생성 시 고정됩니다. Exadata 디스크그룹은 보통 4MB입니다." },
+ { q: "compatible.rdbms를 올릴 때의 위험은?", o: ["디스크그룹이 읽기 전용이 된다", "그보다 낮은 버전의 DB가 그 디스크그룹을 열 수 없게 되고, 되돌릴 수 없다", "리밸런스가 멈춘다", "AU 크기가 바뀐다"], a: 1, e: "compatible 속성은 올리기만 가능하므로 같은 디스크그룹을 쓰는 DB 버전을 먼저 확인해야 합니다." }
+]},
+/* ───── 6호선 패치 ───── */
+patch: { lessons: [
+{ id:"patch-10", title:"OPatch 업데이트와 버전 확인", min:4, ref:[["MOS 6880880 · OPatch 다운로드", "https://updates.oracle.com/download/6880880.html"]], body:[
+ ["p","RU README에는 '필요한 최소 OPatch 버전'이 적혀 있습니다. 홈마다(GI·DB) OPatch가 따로 있으니 모든 홈을 맞춰야 합니다."],
+ ["p","◎ 모든 노드, grid 홈과 oracle 홈 각각"],
+ ["code","bash","# STEP 1. 현재 버전\n/u01/app/19.0.0/grid/OPatch/opatch version\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch version\n\n# STEP 2. 옛 OPatch 백업 후 새 버전 풀기 (홈 소유자로, GI 홈은 root 권한 필요할 수 있음)\ncd /u01/app/oracle/product/19.0.0/dbhome_1\nmv OPatch OPatch_$(date +%Y%m%d)\nunzip -q /stage/p6880880_190000_Linux-x86-64.zip -d /u01/app/oracle/product/19.0.0/dbhome_1\n\n# STEP 3. 확인\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch version"],
+ ["ul",["GI 홈은 패치 전 상태에서 root 소유 파일이 섞여 있어, OPatch 디렉터리 교체 시 권한 문제가 날 수 있습니다. 소유자·권한이 기존과 같은지 확인하세요.","OPatch 버전이 README 요구보다 낮으면 opatchauto가 시작 단계에서 멈춥니다."]],
+ ["tip","작업계획서 '사전 작업'에 '모든 노드·모든 홈 OPatch 버전 캡처'를 넣어 두면 당일 시간을 아낄 수 있습니다."]
+]},
+{ id:"patch-11", title:"패치 충돌 확인과 Merge 패치", min:5, ref:[["Database Patch Maintenance 19c", D + "dbptc/index.html"]], body:[
+ ["p","홈에 개별(Interim, One-off) 패치가 있으면 새 RU와 충돌할 수 있습니다. 충돌이 나면 ① 새 RU에 그 버그 수정이 이미 포함됐는지 확인하고, ② 아니면 새 RU 위에 올릴 수 있는 버전(또는 Merge 패치)을 SR로 요청합니다."],
+ ["code","bash","# oracle 계정 — STEP 1. 지금 홈에 있는 개별 패치\n$ORACLE_HOME/OPatch/opatch lspatches\n\n# STEP 2. 새 RU와 충돌 검사 (패치는 풀어 둔 디렉터리)\ncd /stage/37000000\n$ORACLE_HOME/OPatch/opatch prereq CheckConflictAgainstOHWithDetail -ph ./\n\n# root — GI 포함 전체 분석 (실제 적용 안 함)\n/u01/app/19.0.0/grid/OPatch/opatchauto apply /stage/37000000 -analyze\n\n# 이 홈에 이미 고쳐진 버그 목록에서 특정 버그 찾기\n$ORACLE_HOME/OPatch/opatch lsinventory -bugs_fixed | grep 34567890"],
+ ["tbl",[["결과","조치"],["충돌 없음","그대로 진행"],["Superset (새 RU가 개별 패치 내용을 포함)","개별 패치는 자동으로 롤백되고 RU가 대신함 — 문제 없음"],["Conflict (진짜 충돌)","새 RU 버전용 개별 패치 또는 Merge 패치를 SR로 요청, 받을 때까지 작업 연기 검토"]]],
+ ["tip","My Oracle Support의 패치 충돌 확인 도구(Conflict Checker)에 opatch lsinventory 결과를 올리면 대상 RU 기준으로 충돌 여부와 필요한 패치를 알려 줍니다. 작업 1~2주 전에 돌려 두면 Merge 패치를 기다릴 시간을 벌 수 있습니다."]
+]}],
+ quiz: [
+ { q: "홈의 OPatch를 새 버전으로 바꿀 때 받는 패치 번호는?", o: ["6880880", "1929745", "2118136", "888888"], a: 0, e: "OPatch는 패치 6880880으로 배포됩니다. 홈마다 따로 교체해야 합니다." },
+ { q: "새 RU와 홈의 개별 패치 충돌을 미리 검사하는 opatch 명령은?", o: ["opatch apply -silent", "opatch prereq CheckConflictAgainstOHWithDetail", "opatch rollback", "opatch util cleanup"], a: 1, e: "패치를 푼 디렉터리를 지정해 실제 적용 없이 충돌 여부를 확인합니다." },
+ { q: "충돌 검사 결과 'Superset'의 의미는?", o: ["적용 불가", "새 패치가 기존 개별 패치 내용을 포함해 기존 패치를 대체한다", "두 패치를 모두 롤백해야 한다", "OPatch 버전이 낮다"], a: 1, e: "Superset이면 기존 개별 패치는 롤백되고 새 패치가 그 수정을 포함하므로 정상 진행할 수 있습니다." },
+ { q: "opatchauto apply … -analyze 옵션의 효과는?", o: ["바로 적용", "적용 가능 여부만 분석하고 실제 변경은 하지 않음", "롤백", "인벤토리 삭제"], a: 1, e: "작업 전 사전 점검으로 -analyze를 돌려 충돌·공간·권한 문제를 미리 찾습니다." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    (ADD[id].lessons || []).forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz || []);
+  });
+})();
+
+/* ───────── v0.1.2 보강 ②: 성능·보안·DG·Exadata·ZFS·장애·이관 ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var MOS = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=";
+  var EXA = "https://docs.oracle.com/en/engineered-systems/exadata-database-machine/";
+  var ZFS = "https://docs.oracle.com/en/storage/zfs-storage/zfs-appliance/os8-8-x/";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+/* ───── 7호선 성능튜닝 ───── */
+perf: { lessons: [
+{ id:"perf-12", title:"대기 이벤트 사전: 자주 보는 20개", min:6, ref:[["Database Reference 19c · Descriptions of Wait Events", D + "refrn/descriptions-of-wait-events.html"]], body:[
+ ["tbl",[["대기 이벤트","뜻","먼저 볼 것"],["db file sequential read","블록 1개씩 읽기 (주로 인덱스 경유)","읽는 블록 수가 많은 SQL, 인덱스 효율"],["db file scattered read","여러 블록을 한 번에 읽기 (버퍼 캐시로 Full Scan)","Full Scan하는 SQL"],["direct path read","버퍼 캐시를 거치지 않고 PGA로 읽기 (큰 Full Scan·병렬)","큰 테이블 Full Scan SQL"],["cell single block physical read","Exadata의 1블록 읽기 (= db file sequential read)","인덱스 경유 SQL"],["cell smart table scan","Exadata Smart Scan 진행 중","오프로드 비율, Storage Index 효과"],["log file sync","COMMIT이 LGWR의 Redo 쓰기 완료를 기다림","커밋 빈도, log file parallel write 시간"],["log file parallel write","LGWR가 Redo 파일에 쓰는 시간","Redo 디스크 I/O 성능"],["log file switch (checkpoint incomplete)","로그 스위치하려는데 다음 그룹 체크포인트가 안 끝남","Redo 그룹 수·크기, DBWn 쓰기"],["log buffer space","Redo Log Buffer가 가득 참","LGWR 쓰기 속도, 대량 DML"],["enq: TX - row lock contention","다른 세션이 잡은 행 잠금 대기","블로킹 세션 (애플리케이션 로직)"],["enq: TM - contention","테이블 잠금 대기","인덱스 없는 외래 키, DDL"],["buffer busy waits","같은 블록을 다른 세션이 쓰는 중","핫 블록 (시퀀스 키 인덱스 등)"],["read by other session","같은 블록을 다른 세션이 디스크에서 읽어 오는 중","같은 SQL 동시 실행"],["free buffer waits","버퍼 캐시에 빈 버퍼가 없음 (DBWn이 못 따라감)","DBWn 쓰기 I/O, 캐시 크기"],["latch: shared pool","Shared Pool 할당 경합","하드 파싱, 리터럴 SQL"],["library cache lock / pin","객체 정의를 바꾸는 중(DDL·재컴파일) 사용 대기","업무 중 DDL, INVALID 객체"],["cursor: pin S wait on X","같은 커서를 다른 세션이 파싱(X) 중","하드 파싱 폭주, 커서 버전 과다"],["gc buffer busy acquire / release","RAC에서 같은 블록을 노드 간에 주고받는 경합","노드 간 같은 블록 집중 접근"],["gc cr request / gc current request","RAC에서 다른 노드의 블록을 받아 오는 중","인터커넥트 성능, 노드 간 업무 분리"],["resmgr:cpu quantum","Resource Manager가 CPU를 제한해서 기다림","활성 Resource Plan (유지보수 윈도우 플랜 포함)"]]],
+ ["tip","'Idle' 클래스 대기(SQL*Net message from client 등)는 세션이 할 일 없이 쉬는 것이라 튜닝 대상이 아닙니다. Top 대기를 볼 때는 WAIT_CLASS <> 'Idle'로 거르세요."]
+]},
+{ id:"perf-13", title:"Resource Manager와 'resmgr:cpu quantum'", min:5, ref:[["Administrator's Guide 19c · Managing Resources with Oracle Database Resource Manager", D + "admin/managing-resources-with-oracle-database-resource-manager.html"]], body:[
+ ["p","Resource Manager는 CPU·병렬도·세션 수 등을 업무 그룹별로 나눠 주는 기능입니다. 활성 플랜이 CPU를 제한하면 세션은 'resmgr:cpu quantum' 대기를 겪습니다."],
+ ["p","흔한 함정: 별도로 플랜을 만들지 않았어도, 자동 유지보수 작업(통계 수집 등)이 도는 **유지보수 윈도우**(기본: 평일 22시부터 4시간, 주말 06시부터 20시간) 동안 DEFAULT_MAINTENANCE_PLAN이 자동으로 켜집니다. 밤 배치가 이 시간대에 느려지는 원인이 되기도 합니다."],
+ ["code","sql","-- 지금 활성 플랜 (RAC는 인스턴스별)\nSELECT inst_id, name, is_top_plan, cpu_managed FROM gv$rsrc_plan;\nSHOW PARAMETER resource_manager_plan\n\n-- 유지보수 윈도우와 그때 켜지는 플랜\nSELECT window_name, resource_plan, repeat_interval, duration, enabled\nFROM   dba_scheduler_windows;\n\n-- 지금 CPU 제한으로 기다리는 세션\nSELECT inst_id, sid, username, event, sql_id FROM gv$session WHERE event = 'resmgr:cpu quantum';"],
+ ["code","sql","-- (검토 후) 윈도우가 플랜을 바꾸지 않게 하는 예\nBEGIN\n  DBMS_SCHEDULER.SET_ATTRIBUTE('MONDAY_WINDOW', 'RESOURCE_PLAN', '');\nEND;\n/\n-- 플랜을 고정해 스케줄러 윈도우가 바꾸지 못하게 (FORCE: 접두어)\nALTER SYSTEM SET resource_manager_plan = 'FORCE:DEFAULT_PLAN' SCOPE=BOTH SID='*';"],
+ ["warn","Resource Manager 설정 변경은 다른 업무의 CPU 보호 장치를 끄는 것일 수 있습니다. 고객·애플리케이션 담당자와 합의하고, 변경 전 DBA_SCHEDULER_WINDOWS 값을 백업해 두세요."]
+]}],
+ quiz: [
+ { q: "'log file sync' 대기가 길 때 함께 볼 대기 이벤트는?", o: ["db file scattered read", "log file parallel write", "gc cr request", "direct path read"], a: 1, e: "log file sync는 COMMIT이 LGWR 쓰기를 기다리는 것이므로, LGWR의 실제 쓰기 시간(log file parallel write)이 긴지부터 봅니다." },
+ { q: "'enq: TM - contention' 대기의 대표 원인은?", o: ["TEMP 부족", "인덱스 없는 외래 키 또는 DDL", "Redo 부족", "리스너 장애"], a: 1, e: "부모 행 변경 시 인덱스 없는 FK의 자식 테이블에 TM 잠금이 걸리거나, DDL이 테이블 잠금을 잡을 때 생깁니다." },
+ { q: "Exadata의 'cell single block physical read'에 해당하는 일반 DB 대기는?", o: ["db file sequential read", "db file scattered read", "log file sync", "direct path write"], a: 0, e: "1블록 단위 읽기(주로 인덱스 경유)입니다. Smart Scan은 'cell smart table scan'으로 나타납니다." },
+ { q: "'log file switch (checkpoint incomplete)'가 자주 나면 검토할 것은?", o: ["Undo 크기", "리두 로그 그룹 수·크기와 DBWn 쓰기 속도", "TEMP 크기", "리스너 설정"], a: 1, e: "다음 그룹을 재사용하려는데 그 그룹이 아직 체크포인트가 안 끝난 상황입니다. 그룹을 늘리거나 크기를 키웁니다." },
+ { q: "별도 플랜이 없는데 밤에만 'resmgr:cpu quantum'이 보인다면?", o: ["CPU 고장", "유지보수 윈도우 동안 DEFAULT_MAINTENANCE_PLAN이 자동으로 켜진 경우", "리두 부족", "통계가 없음"], a: 1, e: "자동 유지보수 작업이 도는 윈도우에 맞춰 스케줄러가 플랜을 활성화합니다." },
+ { q: "Top 대기 이벤트를 볼 때 보통 제외하는 대기 클래스는?", o: ["User I/O", "Commit", "Idle", "Concurrency"], a: 2, e: "Idle은 세션이 할 일 없이 기다리는 시간(예: SQL*Net message from client)이라 튜닝 대상이 아닙니다." }
+]},
+/* ───── 8호선 보안·계정 ───── */
+sec: { lessons: [
+{ id:"sec-8", title:"기본 비밀번호·스키마 전용 계정 점검", min:4, ref:[["Security Guide 19c · Managing Security for Oracle Database Users", D + "dbseg/index.html"], ["Database Reference 19c · DBA_USERS_WITH_DEFPWD", D + "refrn/DBA_USERS_WITH_DEFPWD.html"]], body:[
+ ["code","sql","-- 기본(알려진) 비밀번호를 그대로 쓰는 계정\nSELECT d.username, u.account_status\nFROM   dba_users_with_defpwd d JOIN dba_users u ON u.username = d.username;\n\n-- 오라클이 관리하는 기본 계정인지(ORACLE_MAINTAINED), 인증 방식\nSELECT username, account_status, oracle_maintained, authentication_type, profile\nFROM   dba_users WHERE oracle_maintained = 'N' ORDER BY username;"],
+ ["p","애플리케이션 소유 스키마(테이블 주인)는 사람이 직접 로그인할 일이 거의 없습니다. 18c부터는 비밀번호 없는 **스키마 전용 계정**으로 만들어 로그인 자체를 막을 수 있습니다."],
+ ["code","sql","CREATE USER app_owner NO AUTHENTICATION DEFAULT TABLESPACE app_data QUOTA UNLIMITED ON app_data;\nALTER USER app_owner NO AUTHENTICATION;       -- 기존 계정을 전환\n-- 작업할 때는 프록시 접속으로\nALTER USER app_owner GRANT CONNECT THROUGH dba_suje;\n--   sqlplus dba_suje[app_owner]@DBBIG\nSELECT username, authentication_type FROM dba_users WHERE username = 'APP_OWNER';   -- NONE"],
+ ["tip","보안 진단에서 '애플리케이션 소유자 계정 로그인 가능' 지적이 나오면 스키마 전용 계정 전환을 대안으로 제시할 수 있습니다. 단, 그 계정으로 접속하는 배치·스크립트가 없는지 먼저 확인하세요."]
+]},
+{ id:"sec-9", title:"네트워크 암호화(NNE) 설정과 확인", min:4, ref:[["Security Guide 19c · Configuring Oracle Database Native Network Encryption and Data Integrity", D + "dbseg/configuring-network-data-encryption-and-integrity.html"]], body:[
+ ["p","Oracle Native Network Encryption(NNE)은 sqlnet.ora 설정만으로 클라이언트-DB 간 통신을 암호화합니다. 예전에는 Advanced Security 옵션에 포함됐지만 지금은 별도 라이선스 없이 쓸 수 있습니다."],
+ ["code","bash","# DB 서버 sqlnet.ora (oracle 홈, RAC는 모든 노드)\nSQLNET.ENCRYPTION_SERVER = REQUIRED\nSQLNET.ENCRYPTION_TYPES_SERVER = (AES256)\nSQLNET.CRYPTO_CHECKSUM_SERVER = REQUIRED\nSQLNET.CRYPTO_CHECKSUM_TYPES_SERVER = (SHA256)"],
+ ["code","sql","-- 지금 내 세션이 암호화됐나\nSELECT network_service_banner FROM v$session_connect_info\nWHERE  sid = SYS_CONTEXT('USERENV', 'SID');\n--   'AES256 Encryption service adapter …' 줄이 보이면 암호화 중"],
+ ["tbl",[["값","뜻"],["REJECTED","암호화 안 함 (요청해도 거부)"],["ACCEPTED (기본)","상대가 원하면 암호화"],["REQUESTED","가능하면 암호화"],["REQUIRED","반드시 암호화 — 상대가 못 하면 접속 실패"]]],
+ ["warn","서버를 REQUIRED로 바꾸면 암호화를 지원하지 않는 아주 오래된 클라이언트·드라이버는 접속에 실패합니다. 먼저 REQUESTED로 두고 접속 현황을 본 뒤 올리는 단계적 적용이 안전합니다."]
+]},
+{ id:"sec-10", title:"보안 진단 단골 지적과 대응", min:5, ref:[["Security Guide 19c", D + "dbseg/index.html"]], body:[
+ ["tbl",[["지적 항목","확인 → 대응"],["기본 비밀번호 계정","DBA_USERS_WITH_DEFPWD → 비밀번호 변경 또는 계정 잠금"],["비밀번호 유효기간 무제한","DBA_PROFILES의 PASSWORD_LIFE_TIME → 업무 계정 프로파일에 기간 설정 (서비스 계정은 고객 정책에 따름)"],["로그인 실패 제한 없음","FAILED_LOGIN_ATTEMPTS → 적절한 값 설정 (기본 프로파일 10)"],["비밀번호 복잡도 미적용","PASSWORD_VERIFY_FUNCTION → utlpwdmg.sql 함수 적용"],["PUBLIC에 위험 패키지 실행 권한","DBA_TAB_PRIVS (UTL_FILE, UTL_TCP, UTL_HTTP 등) → 영향도 확인 후 REVOKE, 필요한 계정에만 GRANT"],["불필요한 DBA 롤 보유","DBA_ROLE_PRIVS → 최소 권한으로 조정"],["감사 미설정","AUDIT_UNIFIED_ENABLED_POLICIES → 로그온 실패·권한 변경 등 감사 정책 활성화"],["리스너 원격 관리","listener.ora → ADMIN_RESTRICTIONS_<리스너명> = ON"]]],
+ ["code","sql","-- 프로파일별 주요 비밀번호 설정 한눈에\nSELECT profile, resource_name, limit FROM dba_profiles\nWHERE  resource_name IN ('PASSWORD_LIFE_TIME','FAILED_LOGIN_ATTEMPTS','PASSWORD_LOCK_TIME','PASSWORD_VERIFY_FUNCTION')\nORDER  BY profile, resource_name;\n-- LIMIT = 'DEFAULT' 이면 DEFAULT 프로파일 값을 따른다는 뜻 — DEFAULT 프로파일 값까지 같이 확인\n\n-- PUBLIC에 실행 권한이 있는 네트워크·파일 패키지\nSELECT table_name, privilege FROM dba_tab_privs\nWHERE  grantee = 'PUBLIC' AND table_name IN ('UTL_FILE','UTL_TCP','UTL_HTTP','UTL_SMTP','DBMS_LOB');"],
+ ["warn","PUBLIC 권한 회수는 그 패키지를 쓰던 애플리케이션을 바로 깨뜨릴 수 있습니다. 진단 보고서에 '조치 완료'를 쓰기 전, 회수 대상 패키지를 실제로 쓰는 계정을 확인하고 그 계정에 직접 GRANT한 뒤 PUBLIC에서 회수하는 순서를 지키세요."]
+]}],
+ quiz: [
+ { q: "기본(알려진) 비밀번호를 그대로 쓰는 계정을 보여주는 뷰는?", o: ["DBA_USERS_WITH_DEFPWD", "DBA_PROFILES", "V$PWFILE_USERS", "DBA_ROLES"], a: 0, e: "DBA_USERS_WITH_DEFPWD에 나오면 기본 비밀번호를 쓰고 있다는 뜻입니다." },
+ { q: "18c 이후 비밀번호 없이 로그인을 막는 스키마 전용 계정을 만드는 구문은?", o: ["IDENTIFIED EXTERNALLY", "NO AUTHENTICATION", "ACCOUNT LOCK", "PASSWORD EXPIRE"], a: 1, e: "CREATE/ALTER USER … NO AUTHENTICATION으로 만들면 DBA_USERS.AUTHENTICATION_TYPE이 NONE이 됩니다." },
+ { q: "sqlnet.ora의 SQLNET.ENCRYPTION_SERVER = REQUIRED의 효과는?", o: ["암호화 안 함", "상대가 원하면 암호화", "반드시 암호화, 못 하면 접속 실패", "체크섬만 사용"], a: 2, e: "REQUIRED는 암호화를 강제합니다. 기본값은 ACCEPTED입니다." },
+ { q: "현재 세션의 네트워크 암호화 여부를 확인하는 뷰는?", o: ["V$SESSION_CONNECT_INFO", "V$ENCRYPTION_WALLET", "V$SESSTAT", "DBA_ENCRYPTED_COLUMNS"], a: 0, e: "NETWORK_SERVICE_BANNER에 'AES256 Encryption service adapter' 같은 줄이 있으면 암호화 중입니다." },
+ { q: "DBA_PROFILES에서 LIMIT 값이 'DEFAULT'인 의미는?", o: ["무제한", "DEFAULT 프로파일의 같은 항목 값을 따른다", "0", "설정 오류"], a: 1, e: "그래서 업무 프로파일만 보고 판단하면 안 되고, DEFAULT 프로파일 값까지 확인해야 합니다." }
+]},
+/* ───── 9호선 Data Guard ───── */
+dg: { lessons: [
+{ id:"dg-9", title:"Switchover 절차 (브로커 기준)", min:5, ref:[["Data Guard Broker 19c · Switchover and Failover Operations", D + "dgbkr/index.html"]], body:[
+ ["p","Switchover는 계획된 역할 교대입니다. 데이터 손실 없이 Primary ↔ Standby를 바꿉니다(정기 DR 훈련, 장비 점검)."],
+ ["code","bash","# oracle 계정, Primary 쪽에서\ndgmgrl sys@DBBIG\n\n# STEP 1. 사전 점검 — 'Ready for Switchover: Yes' 확인\nDGMGRL> SHOW CONFIGURATION;\nDGMGRL> VALIDATE DATABASE 'DBBIG_STBY';\n\n# STEP 2. 역할 교대\nDGMGRL> SWITCHOVER TO 'DBBIG_STBY';\n\n# STEP 3. 결과 확인 — 새 Primary·Standby, 오류 없음(SUCCESS)\nDGMGRL> SHOW CONFIGURATION;"],
+ ["code","sql","-- 브로커 없이 SQL로 사전 검증 (12.1+, Primary에서)\nALTER DATABASE SWITCHOVER TO dbbig_stby VERIFY;\n\n-- 교대 후 양쪽에서\nSELECT name, db_unique_name, database_role, open_mode, switchover_status FROM v$database;"],
+ ["ul",["사전 점검: 전송·적용 지연 0에 가까운지, Standby Redo Log가 준비됐는지, 양쪽 파라미터(FAL_SERVER 등)가 대칭인지.","RAC면 브로커가 필요한 인스턴스 정지·기동을 자동으로 처리합니다.","애플리케이션 접속은 서비스(역할 기반, -role PRIMARY)로 구성해 두면 교대 후 새 Primary에서 자동으로 서비스가 뜹니다."]],
+ ["tip","DR 훈련 보고서에는 '시작 시각, 교대 완료 시각, 서비스 복구 시각, 데이터 검증 결과(예: 테스트 테이블 행 수)'를 남기세요. 다음 훈련 때 비교 기준이 됩니다."]
+]},
+{ id:"dg-10", title:"보호 모드와 Redo 전송 방식", min:5, ref:[["Data Guard Concepts and Administration 19c · Data Guard Protection Modes", D + "sbydb/index.html"]], body:[
+ ["tbl",[["보호 모드","전송","특징"],["Maximum Performance (기본)","ASYNC","Primary 성능 영향 최소, 장애 시 약간의 데이터 손실 가능"],["Maximum Availability","SYNC (또는 FASTSYNC)","Standby가 받았다고 확인해야 커밋 완료. Standby 문제 시 Primary는 계속 동작"],["Maximum Protection","SYNC","Standby에 못 쓰면 Primary가 멈춤 — 데이터 손실 0을 최우선"]]],
+ ["ul",["SYNC AFFIRM: Standby가 Redo를 디스크(Standby Redo Log)에 쓴 뒤 확인.","SYNC NOAFFIRM(FASTSYNC, 12.1+): Standby가 메모리로 받은 즉시 확인 — Maximum Availability에서 지연을 줄임.","SYNC는 네트워크 왕복 시간만큼 커밋이 느려집니다(log file sync 증가). 원거리 DR은 보통 ASYNC입니다."]],
+ ["code","bash","dgmgrl sys@DBBIG\nDGMGRL> SHOW DATABASE 'DBBIG_STBY' LogXptMode;\nDGMGRL> EDIT DATABASE 'DBBIG_STBY' SET PROPERTY LogXptMode = 'SYNC';\nDGMGRL> EDIT CONFIGURATION SET PROTECTION MODE AS MaxAvailability;\nDGMGRL> SHOW CONFIGURATION;"],
+ ["code","sql","SELECT protection_mode, protection_level FROM v$database;\nSHOW PARAMETER log_archive_dest_2"],
+ ["warn","보호 모드를 올리기 전에 반드시 Primary·Standby 양쪽의 LogXptMode(전송 방식)를 먼저 맞추세요. 조건이 안 맞으면 모드 변경이 거부되거나, Maximum Protection에서는 Primary가 멈출 수 있습니다."]
+]}],
+ quiz: [
+ { q: "Switchover 전에 브로커에서 'Ready for Switchover'를 확인하는 명령은?", o: ["SHOW FAST_START FAILOVER", "VALIDATE DATABASE", "REINSTATE DATABASE", "CONVERT DATABASE"], a: 1, e: "VALIDATE DATABASE가 역할 교대 가능 여부, 지연, SRL 구성 등을 점검해 보여줍니다." },
+ { q: "Data Guard 기본 보호 모드는?", o: ["Maximum Protection", "Maximum Availability", "Maximum Performance", "Maximum Security"], a: 2, e: "기본은 ASYNC 전송의 Maximum Performance입니다." },
+ { q: "Standby에 Redo를 못 쓰면 Primary가 멈추는 보호 모드는?", o: ["Maximum Performance", "Maximum Availability", "Maximum Protection", "Snapshot"], a: 2, e: "Maximum Protection은 데이터 손실 0을 위해 Standby 확인 없이는 커밋하지 않습니다." },
+ { q: "FASTSYNC(SYNC NOAFFIRM)의 특징은?", o: ["Standby가 디스크에 쓴 뒤 확인", "Standby가 메모리로 받은 즉시 확인해 지연을 줄임", "ASYNC와 같음", "Far Sync 전용"], a: 1, e: "12.1부터 Maximum Availability에서 SYNC NOAFFIRM을 써서 커밋 지연을 줄일 수 있습니다." }
+]},
+/* ───── 10호선 Exadata ───── */
+exa: { lessons: [
+{ id:"exa-7", title:"셀 롤링 재기동 전 확인: asmdeactivationoutcome", min:5, ref:[["MOS 1188080.1 · Steps to shut down or reboot an Exadata storage cell without affecting ASM", MOS + "1188080.1"]], body:[
+ ["p","셀 한 대를 내리면 그 셀의 그리드 디스크가 모두 OFFLINE됩니다. 다른 셀에 미러가 온전히 있을 때만 안전합니다. 그걸 셀이 직접 판단해 주는 값이 **asmdeactivationoutcome**입니다."],
+ ["p","◎ 재기동할 셀에서 (celladmin 또는 root)"],
+ ["code","bash","# STEP 1. 모든 그리드 디스크가 내려도 되는지 — 전부 'Yes' 여야 함\ncellcli -e list griddisk attributes name, asmmodestatus, asmdeactivationoutcome\n\n# STEP 2. 그리드 디스크 비활성화 (ASM에서 OFFLINE 처리)\ncellcli -e alter griddisk all inactive\ncellcli -e list griddisk attributes name, asmmodestatus   # 모두 OFFLINE 확인\n\n# STEP 3. 셀 서비스 중지 → 작업(재부팅 등)\ncellcli -e alter cell shutdown services all\n\n# STEP 4. 작업 후 다시 활성화\ncellcli -e alter griddisk all active\n\n# STEP 5. SYNCING → ONLINE 될 때까지 대기 (Resync)\ncellcli -e list griddisk attributes name, asmmodestatus"],
+ ["warn","asmdeactivationoutcome에 'Yes'가 아닌 값(예: 다른 셀의 미러가 OFFLINE이라 데이터를 잃을 수 있다는 메시지)이 하나라도 있으면 절대 진행하지 마세요. 다음 셀은 이전 셀의 모든 그리드 디스크가 ONLINE이 된 뒤에 진행합니다."],
+ ["tip","ASM 쪽에서도 같은 상황을 볼 수 있습니다: V$ASM_DISK의 MODE_STATUS, V$ASM_OPERATION의 RESYNC. 셀 작업이 길어질 것 같으면 디스크그룹의 disk_repair_time·failgroup_repair_time을 확인하세요(ASM 노선 참고)."]
+]},
+{ id:"exa-8", title:"Storage Index와 HCC 이해", min:5, ref:[["Exadata System Software User's Guide · Features", EXA + "sagug/index.html"]], body:[
+ ["p","**Storage Index**는 셀 메모리에 '이 구역(region)의 컬럼 최솟값·최댓값'을 자동으로 기억해, 조건에 맞을 수 없는 구역은 아예 읽지 않게 합니다. 만들거나 관리할 필요가 없습니다."],
+ ["code","sql","-- Storage Index로 아낀 I/O (누적)\nSELECT name, ROUND(value/1024/1024/1024,1) gb FROM v$sysstat\nWHERE  name IN ('cell physical IO bytes saved by storage index',\n                'cell physical IO bytes eligible for predicate offload',\n                'cell physical IO interconnect bytes returned by smart scan');"],
+ ["p","**HCC(Hybrid Columnar Compression)**는 행들을 묶어 컬럼별로 압축하는 Exadata(및 오라클 스토리지) 전용 압축입니다. 이력·적재 후 조회만 하는 데이터에 압축률이 매우 높습니다."],
+ ["tbl",[["HCC 종류","용도"],["QUERY LOW / QUERY HIGH","자주 조회하는 데이터 (쿼리 성능과 압축 균형)"],["ARCHIVE LOW / ARCHIVE HIGH","거의 안 보는 보관 데이터 (최대 압축)"]]],
+ ["code","sql","-- 오래된 파티션을 HCC로 압축 (direct-path로 다시 씀)\nALTER TABLE app.orders_hist MOVE PARTITION p202409 COLUMN STORE COMPRESS FOR QUERY HIGH UPDATE INDEXES;\nSELECT partition_name, compression, compress_for FROM dba_tab_partitions\nWHERE  table_owner = 'APP' AND table_name = 'ORDERS_HIST';"],
+ ["warn","HCC 데이터는 direct-path 적재(INSERT /*+ APPEND */, MOVE 등)로 들어올 때만 압축됩니다. 이후 일반 UPDATE된 행은 HCC 압축이 풀린 형태로 바뀌어 압축률이 떨어지니, 자주 갱신되는 데이터에는 맞지 않습니다."]
+]},
+{ id:"exa-9", title:"ILOM으로 하드웨어 장애 확인", min:4, ref:[["Oracle ILOM Documentation", "https://docs.oracle.com/en/servers/management/ilom/index.html"]], body:[
+ ["code","bash","# ILOM에 ssh 접속 후 (DB 서버·셀 공통)\nshow /SP/faultmgmt                 # 장애가 기록된 부품 목록\nstart /SP/faultmgmt/shell          # 장애 관리 셸 진입\nfaultmgmtsp> fmadm faulty          # 진단 내용·부품·권고 조치\nfaultmgmtsp> exit\n\n# 호스트 OS에서 (root)\nipmitool sel list | tail -20       # 시스템 이벤트 로그\nipmitool sensor | grep -iv ' ok '  # 정상 아닌 센서"],
+ ["ul",["fmadm faulty 출력의 UUID, 부품 경로(예: /SYS/MB/P0/D3), 메시지 ID를 SR에 그대로 붙입니다.","부품 교체 후에도 장애 표시가 남아 있으면, 오라클 엔지니어의 안내에 따라 fmadm acquit/repaired로 정리합니다. 원인 확인 없이 임의로 지우지 마세요.","Exadata 셀은 cellcli -e list alerthistory로도 하드웨어 경보를 함께 확인합니다."]],
+ ["tip","메모리 ECC(정정 가능 오류) 경보처럼 당장 서비스 영향이 없는 경우라도, 같은 DIMM 경보가 반복되면 예방 교체 대상입니다. 발생 이력(날짜·횟수)을 정리해 두면 교체 승인을 받기 쉽습니다."]
+]},
+{ id:"exa-10", title:"Exadata 네트워크 구성 한눈에", min:4, ref:[["Exadata Database Machine System Overview", EXA + "dbmso/index.html"]], body:[
+ ["tbl",[["네트워크","용도","비고"],["관리(Admin) 네트워크","DB 서버·셀·스위치 관리 접속, ILOM","보통 1/10GbE, 서비스 트래픽과 분리"],["클라이언트(Client) 네트워크","애플리케이션 접속 (SCAN·VIP)","DB 서버에만 있음, 본딩"],["백업 네트워크 (선택)","RMAN 백업 → ZFS·ZDLRA 등","클라이언트 망과 분리해 백업 부하 격리"],["내부(Private) 네트워크","DB ↔ 셀 I/O, RAC 인터커넥트","X8M부터 RoCE, 이전 세대는 InfiniBand"]]],
+ ["code","bash","# DB 서버 (root) — 인터페이스·본딩\nip -br addr\ncat /proc/net/bonding/bondeth0 2>/dev/null | head -20\n\n# 셀까지 내부망 연결 확인 (DB 서버에서, 셀 목록 파일 사용)\ndcli -g ~/cell_group -l root 'hostname; ip -br addr | grep -i re'"],
+ ["tip","장애 보고에서 '어느 망 문제인가'를 먼저 구분하면 원인 범위가 크게 줄어듭니다. 예) 애플리케이션 접속 불가 = 클라이언트 망/SCAN, 셀 I/O 지연 = 내부망, ILOM 접속 불가 = 관리망."]
+]}],
+ quiz: [
+ { q: "Exadata 셀을 내리기 전에 반드시 'Yes'인지 확인할 그리드 디스크 속성은?", o: ["asmmodestatus", "asmdeactivationoutcome", "status", "cachingPolicy"], a: 1, e: "asmdeactivationoutcome이 Yes여야 그 셀을 내려도 다른 셀의 미러로 데이터가 보호됩니다." },
+ { q: "셀 작업 후 그리드 디스크를 다시 활성화했을 때 asmmodestatus의 흐름은?", o: ["ONLINE → OFFLINE", "SYNCING → ONLINE", "DROPPED → ONLINE", "UNUSED → ONLINE"], a: 1, e: "OFFLINE 동안의 변경을 Resync하는 동안 SYNCING이고, 끝나면 ONLINE이 됩니다." },
+ { q: "Storage Index에 대한 설명으로 옳은 것은?", o: ["DBA가 CREATE로 만든다", "셀 메모리에 구역별 최솟값·최댓값을 자동으로 기억해 불필요한 I/O를 건너뛴다", "B-tree 인덱스의 일종", "디스크에 저장되는 영구 인덱스"], a: 1, e: "자동으로 만들어지고 관리할 필요가 없습니다. 효과는 'cell physical IO bytes saved by storage index' 통계로 봅니다." },
+ { q: "HCC 압축이 적용되는 적재 방식은?", o: ["일반 INSERT", "direct-path 적재 (APPEND, MOVE, CTAS 등)", "UPDATE", "MERGE만"], a: 1, e: "HCC는 direct-path로 들어온 데이터에 적용되고, 이후 갱신된 행은 압축률이 떨어집니다." },
+ { q: "ILOM에서 진단된 하드웨어 장애 상세를 보는 명령은?", o: ["show /SP/network", "fmadm faulty (faultmgmt 셸)", "cellcli -e list cell", "ipmitool lan print"], a: 1, e: "start /SP/faultmgmt/shell로 들어가 fmadm faulty를 실행하면 UUID·부품·권고 조치가 나옵니다." },
+ { q: "X8M 이후 Exadata에서 DB 서버와 셀 사이 내부 네트워크 기술은?", o: ["InfiniBand", "RoCE", "Fibre Channel", "iSCSI"], a: 1, e: "X8M부터 RDMA over Converged Ethernet(RoCE)을 쓰고, 이전 세대는 InfiniBand였습니다." }
+]},
+/* ───── 11호선 ZFS ───── */
+zfs: { lessons: [
+{ id:"zfs-6", title:"백업용 쉐어 권장 설정", min:5, ref:[["MOS 2079993.1 · ZFS Storage Appliance: Best Practices When Using the Appliance for Databases", MOS + "2079993.1"], ["ZFS Storage Appliance Administration Guide", ZFS + "index.html"]], body:[
+ ["p","RMAN 백업 파일은 크게 순차로 쓰고 읽습니다. 그래서 백업 전용 프로젝트·쉐어는 일반 기본값보다 '큰 레코드, 처리량 우선'으로 맞추는 것이 오라클 모범 사례입니다."],
+ ["tbl",[["설정","RMAN 백업 쉐어 권장","데이터파일을 올리는 쉐어 (참고)"],["Database record size","1M","32K (최신 모범 사례 기준)"],["Synchronous write bias (logbias)","Throughput","워크로드에 따라 (latency/throughput)"],["Data compression","LZ4 등 가벼운 압축 (RMAN 압축과 중복 여부 검토)","LZ4"]]],
+ ["code","bash","# ZFS CLI (ssh root@zfs-head1) — 프로젝트 기본값으로 지정하면 하위 쉐어가 상속\nzfs-head1:> shares select DBBIG_BACKUP\nzfs-head1:shares DBBIG_BACKUP> set recordsize=1M\nzfs-head1:shares DBBIG_BACKUP> set logbias=throughput\nzfs-head1:shares DBBIG_BACKUP> commit\nzfs-head1:shares DBBIG_BACKUP> show"],
+ ["ul",["프로젝트에 설정해 두면 그 아래 새로 만드는 쉐어가 값을 상속합니다. 이미 만든 쉐어는 상속 여부를 확인하세요.","레코드 크기는 이후 새로 쓰는 파일부터 적용됩니다. 기존 백업 파일은 바뀌지 않습니다.","RMAN에서 이미 압축(COMPRESSED BACKUPSET)한다면 ZFS 압축 효과는 거의 없고 CPU만 씁니다. 둘 중 하나를 고르세요."]],
+ ["tip","정확한 권장값은 ZFS OS 버전·풀 구성(HDD/AFP)에 따라 달라질 수 있습니다. 설치·변경 전에는 MOS 2079993.1과 해당 버전 백업 모범사례 백서를 확인하세요."]
+]},
+{ id:"zfs-7", title:"ZFS 장애·경보 확인 CLI", min:4, ref:[["ZFS Storage Appliance Customer Service Manual · Working with Problems", ZFS + "service-manual/working-problems.html"]], body:[
+ ["code","bash","# ssh root@zfs-head1\n# STEP 1. 지금 열려 있는 문제(장애)\nzfs-head1:> maintenance problems show\nzfs-head1:maintenance problems> select problem-000\nzfs-head1:maintenance problem-000> show          # 영향·부품·권고 조치\n\n# STEP 2. 로그 종류와 최근 시각\nzfs-head1:> maintenance logs show                 # alert / audit / fltlog / system ...\nzfs-head1:maintenance logs> select alert\nzfs-head1:maintenance logs alert> show            # 최근 경보 (previous/next로 넘김)\n\n# STEP 3. 하드웨어 상태\nzfs-head1:> maintenance hardware show\n\n# STEP 4. 클러스터(두 헤드) 상태\nzfs-head1:> configuration cluster show"],
+ ["ul",["Phone Home이 켜져 있으면 열린 문제가 오라클 서포트로 자동 보고됩니다. 고객 정책상 꺼져 있다면 직접 SR을 열어야 합니다.","장애 로그를 SR에 첨부할 때는 로그 노드에서 collect 명령으로 묶어 받을 수 있습니다(BUI의 Maintenance > Logs에서도 가능)."]],
+ ["tip","월간 점검 보고서에 'maintenance problems show' 결과(없음 포함)와 클러스터 상태 캡처를 넣으면 ZFS 쪽 점검 증빙이 됩니다."]
+]},
+{ id:"zfs-8", title:"ZFS 백업 vs ZDLRA", min:5, ref:[["Zero Data Loss Recovery Appliance Documentation", "https://docs.oracle.com/en/engineered-systems/zero-data-loss-recovery-appliance/index.html"]], body:[
+ ["tbl",[["구분","ZFS Storage Appliance","ZDLRA (Recovery Appliance)"],["정체","범용 NAS (NFS·SMB 등)","오라클 DB 백업 전용 어플라이언스"],["백업 방식","RMAN이 파일로 씀 (LEVEL 0 + 1 반복)","최초 LEVEL 0 이후 LEVEL 1만 계속 (incremental forever)"],["복구 시 전체 백업","주기적 LEVEL 0 필요","받은 증분으로 '가상 전체 백업'을 어플라이언스가 만들어 둠"],["데이터 손실 최소화","마지막 아카이브 백업 시점까지","실시간 Redo 전송 지원 — 장애 직전까지 보호"],["관리","보존정책·삭제는 RMAN 스크립트로","어플라이언스가 보존 정책에 맞춰 자동 관리"]]],
+ ["ul",["ZDLRA에 백업하는 DB는 RMAN이 SBT(전용 라이브러리) 채널로 보냅니다. ZFS는 NFS(dNFS) 경로에 디스크 백업을 씁니다.","ZDLRA는 백업 시점에 블록 검증을 함께 수행해 손상된 백업이 쌓이는 것을 막습니다."]],
+ ["tip","고객이 'ZFS를 ZDLRA로 바꾸면 뭐가 좋아요?'라고 물으면 세 가지로 답하면 됩니다: ① 주말 LEVEL 0이 없어져 백업 창이 짧아짐 ② 실시간 Redo로 복구 시점이 장애 직전까지 ③ 보존·검증 자동화."]
+]},
+{ id:"zfs-9", title:"ZFS 백업이 느릴 때 보는 순서", min:5, ref:[["Database Reference 19c · V$DNFS_SERVERS", D + "refrn/V-DNFS_SERVERS.html"], ["ZFS Storage Appliance Analytics Guide", ZFS + "index.html"]], body:[
+ ["p","**STEP 1. DB 쪽 — dNFS를 실제로 쓰는가**"],
+ ["code","sql","-- 백업 중에 실행 (dNFS를 안 쓰면 행이 없음)\nSELECT svrname, dirname, mntport, nfsport FROM v$dnfs_servers;\nSELECT pnum, svrname, path, ch_id, sends, recvs FROM v$dnfs_channels;\n\n-- alert 로그에 'Direct NFS: channel id … path …' 메시지가 있는지도 확인"],
+ ["p","**STEP 2. 네트워크 — 경로와 MTU**"],
+ ["code","bash","# DB 서버 (root) — ZFS IP까지 점보 프레임이 통과하나 (MTU 9000 구성일 때)\nping -M do -s 8972 -c 3 <ZFS 데이터 IP>\n# 본딩·NIC 오류 카운터\nip -s link show bondeth1\n\n# oranfstab에 여러 경로(path)를 넣었다면 모두 쓰이는지 STEP 1의 v$dnfs_channels로 확인"],
+ ["p","**STEP 3. ZFS 쪽 — Analytics**: BUI의 Analytics에서 'NFSv3 operations per second broken down by client', 'Network device bytes per second', 디스크 사용률을 백업 시간대에 띄워 병목(네트워크 포화/디스크 포화/한 클라이언트 집중)을 찾습니다."],
+ ["p","**STEP 4. RMAN 쪽** — 채널 수, SECTION SIZE, 압축(BASIC은 CPU를 많이 씀). 출력 속도가 채널 수와 무관하게 일정하면 대상(ZFS·네트워크)이 병목입니다."],
+ ["tip","dNFS 없이 커널 NFS로 백업하면 같은 장비에서도 처리량이 크게 떨어지는 경우가 많습니다. 'v$dnfs_servers가 비어 있음'은 가장 먼저 확인할 항목입니다."]
+]}],
+ quiz: [
+ { q: "ZFS에서 RMAN 백업용 쉐어의 권장 레코드 크기는?", o: ["8K", "32K", "128K", "1M"], a: 3, e: "백업 파일은 큰 순차 I/O라 1M 레코드와 logbias=throughput을 권장합니다." },
+ { q: "RMAN 백업 쉐어의 Synchronous write bias(logbias) 권장값은?", o: ["Latency", "Throughput", "None", "Mirror"], a: 1, e: "대용량 순차 쓰기에는 Throughput이 적합합니다." },
+ { q: "ZFS CLI에서 지금 열린 장애를 보는 명령은?", o: ["status show", "maintenance problems show", "configuration storage show", "shares show"], a: 1, e: "maintenance problems에서 show로 목록을 보고, select problem-XXX로 상세를 봅니다." },
+ { q: "ZFS의 경보·감사·장애 로그를 보는 CLI 위치는?", o: ["maintenance logs", "configuration services", "analytics datasets", "shares"], a: 0, e: "maintenance logs에서 alert, audit, fltlog, system 등을 select해 봅니다." },
+ { q: "ZDLRA의 백업 방식 특징은?", o: ["매주 LEVEL 0 필수", "최초 LEVEL 0 이후 LEVEL 1만 계속(incremental forever)하고 가상 전체 백업을 만든다", "아카이브 로그만 백업", "스냅샷만 사용"], a: 1, e: "ZDLRA는 받은 증분으로 가상 전체 백업을 만들어 주기적 LEVEL 0이 필요 없습니다." },
+ { q: "백업 중 DB가 dNFS를 쓰는지 확인하는 뷰는?", o: ["V$DNFS_SERVERS", "V$ASM_DISK", "V$BACKUP_SET", "V$NFS_CLIENT"], a: 0, e: "dNFS로 연결된 NFS 서버가 V$DNFS_SERVERS에 나옵니다. 비어 있으면 커널 NFS로 쓰고 있는 것입니다." }
+]},
+/* ───── 12호선 장애대응 ───── */
+trouble: { lessons: [
+{ id:"tr-11", title:"ORA-04031 Shared Pool 부족 대응", min:5, ref:[["Database Error Messages 19c · ORA-04031", D + "errmg/index.html"], ["Database Reference 19c · V$SGASTAT", D + "refrn/V-SGASTAT.html"]], body:[
+ ["p","'ORA-04031: unable to allocate N bytes of shared memory (\"shared pool\", …)'는 Shared Pool에서 연속된 메모리 조각을 못 구했다는 뜻입니다. 전체가 모자라서일 수도, 조각나서(단편화)일 수도 있습니다."],
+ ["code","sql","-- STEP 1. 여유와 큰 구성요소 (RAC는 노드별)\nSELECT inst_id, name, ROUND(bytes/1024/1024) mb FROM gv$sgastat\nWHERE  pool = 'shared pool' ORDER BY bytes DESC FETCH FIRST 10 ROWS ONLY;\nSELECT inst_id, ROUND(bytes/1024/1024) free_mb FROM gv$sgastat WHERE pool = 'shared pool' AND name = 'free memory';\n\n-- STEP 2. 예약 영역에서도 실패했나\nSELECT inst_id, request_failures, last_failure_size FROM gv$shared_pool_reserved;\n\n-- STEP 3. ASMM이 Shared Pool을 키우느라 Buffer Cache를 줄이고 있나\nSELECT component, oper_type, ROUND(final_size/1024/1024) mb, start_time\nFROM   v$sga_resize_ops WHERE component IN ('shared pool','DEFAULT buffer cache')\nORDER  BY start_time DESC FETCH FIRST 10 ROWS ONLY;\n\n-- STEP 4. 원인 SQL — 리터럴만 다른 SQL이 많은가 (성능 노선 '바인드 변수' 참고)\nSELECT force_matching_signature, COUNT(*) cnt FROM v$sql\nGROUP  BY force_matching_signature HAVING COUNT(*) > 100 ORDER BY cnt DESC;"],
+ ["ul",["alert 로그와 함께 생기는 트레이스에 어느 구성요소가 공간을 차지하는지 덤프가 남습니다. SR에 첨부하세요.","ALTER SYSTEM FLUSH SHARED_POOL은 응급 처치일 뿐이고, 이후 모든 SQL이 다시 하드 파싱되어 한동안 CPU가 튑니다. 운영계에서는 신중히 씁니다.","근본 대책: 리터럴 SQL 개선(바인드 변수), SHARED_POOL_SIZE 최소값 설정, 필요 시 SGA 증설."]],
+ ["tip","특정 구성요소(예: 'KGLH0', 'SQLA')가 비정상적으로 크다면 버그일 가능성도 있습니다. 구성요소 이름으로 MOS를 검색하면 알려진 버그와 패치가 나오는 경우가 많습니다."]
+]},
+{ id:"tr-12", title:"listener.log로 접속 폭주·출발지 찾기", min:4, ref:[["Net Services Administrator's Guide 19c · Troubleshooting Oracle Net Services", D + "netag/index.html"]], body:[
+ ["code","bash","# grid 계정 (RAC 리스너는 grid 홈) — 로그 위치\nlsnrctl status | grep -i 'Listener Log File'\n#  → $ORACLE_BASE/diag/tnslsnr/<호스트>/listener/alert/log.xml\n#  텍스트 로그: $ORACLE_BASE/diag/tnslsnr/<호스트>/listener/trace/listener.log\nLOG=$ORACLE_BASE/diag/tnslsnr/$(hostname -s)/listener/trace/listener.log\n\n# 분당 접속 수 (최근 것) — 'establish' 줄이 접속 시도\ngrep 'establish' $LOG | awk '{print $1\" \"substr($2,1,5)}' | uniq -c | tail -20\n\n# 출발지 IP별 접속 수 Top\ngrep 'establish' $LOG | grep -o 'HOST=[0-9.]*' | sort | uniq -c | sort -rn | head -10\n\n# 접속 실패(에러 코드가 0이 아닌 줄)\ngrep 'establish' $LOG | awk '$NF != 0' | tail -20"],
+ ["ul",["줄 끝 숫자가 0이면 성공, 12514·12505 같은 값이면 그 에러로 실패한 접속입니다.","SCAN 리스너 로그는 diag/tnslsnr/<호스트>/listener_scan1 같은 별도 디렉터리에 있습니다.","로그 파일이 커지면 adrci의 purge나 로그 순환 정책으로 관리합니다."]],
+ ["tip","'갑자기 세션이 폭주했다'는 장애에서는 V$SESSION 집계와 이 리스너 로그의 출발지 IP 집계를 나란히 보여주면, 어느 애플리케이션 서버가 재접속 폭주를 일으켰는지 바로 설명할 수 있습니다."]
+]},
+{ id:"tr-13", title:"\"DB가 느려요\" 5분 점검 순서", min:5, ref:[["Database Performance Tuning Guide 19c", D + "tgdba/index.html"]], body:[
+ ["p","**STEP 1. OS** — CPU·메모리·스왑부터 (DB 밖 문제를 먼저 배제)"],
+ ["code","bash","top -b -n 1 | head -15\nvmstat 5 3          # r(대기 프로세스), si/so(스왑), wa(I/O 대기)\nfree -g"],
+ ["p","**STEP 2. 지금 무엇을 기다리나 (RAC 전체)**"],
+ ["code","sql","SELECT inst_id, wait_class, event, COUNT(*) cnt\nFROM   gv$session WHERE status = 'ACTIVE' AND wait_class <> 'Idle'\nGROUP  BY inst_id, wait_class, event ORDER BY cnt DESC;"],
+ ["p","**STEP 3. 막고 있는 세션이 있나**"],
+ ["code","sql","SELECT inst_id, sid, serial#, username, event, blocking_instance, blocking_session, seconds_in_wait, sql_id\nFROM   gv$session WHERE blocking_session IS NOT NULL;"],
+ ["p","**STEP 4. 어떤 SQL이 자원을 쓰나**"],
+ ["code","sql","SELECT inst_id, sql_id, COUNT(*) active_sessions\nFROM   gv$session WHERE status = 'ACTIVE' AND type = 'USER' AND sql_id IS NOT NULL\nGROUP  BY inst_id, sql_id ORDER BY 3 DESC FETCH FIRST 5 ROWS ONLY;"],
+ ["p","**STEP 5. 공간·로그** — alert 로그 최근 에러, FRA·아카이브 공간, ASM 여유 (아카이브가 멈추면 모든 DML이 멈춤)"],
+ ["code","bash","tail -100 $ORACLE_BASE/diag/rdbms/dbbig/DBBIG1/trace/alert_DBBIG1.log | grep -E 'ORA-|Checkpoint not complete'"],
+ ["tip","전화로 '느리다'를 들으면 먼저 '모든 화면이 느린가, 특정 기능만 느린가, 언제부터인가'를 물으세요. 특정 기능만이면 STEP 4(SQL), 전체면 STEP 1·2·5 쪽일 가능성이 큽니다. 지난 일이면 ASH·AWR로 같은 순서를 밟습니다."]
+]}],
+ quiz: [
+ { q: "ORA-04031 대응에서 Shared Pool 여유 메모리를 보는 뷰는?", o: ["V$SGASTAT (name = 'free memory')", "V$PGASTAT", "V$SYSSTAT", "V$BH"], a: 0, e: "V$SGASTAT에서 pool = 'shared pool', name = 'free memory'로 여유를 봅니다." },
+ { q: "ALTER SYSTEM FLUSH SHARED_POOL의 부작용은?", o: ["데이터 손실", "이후 SQL이 모두 다시 하드 파싱되어 한동안 CPU가 증가", "인스턴스 재기동", "Redo 삭제"], a: 1, e: "응급 처치일 뿐이고 근본 원인(리터럴 SQL 등)은 그대로 남습니다." },
+ { q: "listener.log에서 접속 결과 코드가 0이 아닌 줄의 의미는?", o: ["정상 접속", "그 에러 코드로 실패한 접속", "리스너 재기동", "로그 순환"], a: 1, e: "마지막 필드가 0이면 성공, 12514 등이면 그 에러로 실패한 접속 시도입니다." },
+ { q: "\"DB가 느려요\" 점검에서 vmstat의 si/so 값이 계속 크다면?", o: ["정상", "스왑이 발생 중 — 메모리 부족 의심", "디스크 여유 충분", "네트워크 지연"], a: 1, e: "si/so는 스왑 인/아웃입니다. SGA·PGA와 OS 메모리(HugePages 설정 포함)를 확인합니다." },
+ { q: "지금 활성 세션의 대기를 볼 때 제외하는 조건으로 알맞은 것은?", o: ["wait_class <> 'Idle'", "status = 'INACTIVE'", "type = 'BACKGROUND'", "sql_id IS NULL"], a: 0, e: "Idle 대기는 일이 없어 쉬는 상태이므로 제외하고 봅니다." }
+]},
+/* ───── 13호선 업그레이드·이관 ───── */
+mig: { lessons: [
+{ id:"mig-9", title:"Data Pump 작업 모니터링과 정리", min:5, ref:[["Utilities 19c · Data Pump", D + "sutil/index.html"], ["Database Reference 19c · DBA_DATAPUMP_JOBS", D + "refrn/DBA_DATAPUMP_JOBS.html"]], body:[
+ ["code","sql","-- 지금·남아 있는 Data Pump 작업\nSELECT owner_name, job_name, operation, job_mode, state, attached_sessions\nFROM   dba_datapump_jobs ORDER BY owner_name, job_name;\n\n-- 진행률\nSELECT sid, serial#, opname, ROUND(sofar/totalwork*100,1) pct, ROUND(time_remaining/60) min_left\nFROM   v$session_longops WHERE opname LIKE 'SYS_%PORT%' AND sofar <> totalwork;"],
+ ["code","bash","# 실행 중인 작업에 붙어서 상태 보기·제어\nexpdp system attach=SYS_EXPORT_SCHEMA_01\nExport> STATUS\nExport> PARALLEL=8          # 실행 중 병렬도 변경\nExport> STOP_JOB=IMMEDIATE  # 멈춤 (나중에 START_JOB으로 재개 가능)\nExport> KILL_JOB            # 완전 취소 (마스터 테이블 삭제)\n\n# 시간·성능 정보를 로그에 남기는 옵션 (12c+)\nexpdp system schemas=APP directory=DP_DIR dumpfile=app_%U.dmp logfile=app_exp.log \\\n  parallel=8 metrics=y logtime=all exclude=statistics"],
+ ["p","비정상 종료로 STATE가 NOT RUNNING이고 ATTACHED_SESSIONS가 0인 작업이 남아 있으면, 같은 이름의 **마스터 테이블**(작업 소유자 스키마의 JOB_NAME 테이블)이 남은 것입니다. 재사용 계획이 없다면 정리합니다."],
+ ["code","sql","-- 남은 마스터 테이블 정리 (작업이 정말 안 도는지 확인 후)\nDROP TABLE system.sys_export_schema_01 PURGE;"],
+ ["tip","exclude=statistics로 통계를 빼고 옮긴 뒤 대상 DB에서 새로 수집하는 방식이 대체로 빠르고 깔끔합니다. 이관 계획서의 사후 작업에 '통계 수집'을 꼭 넣으세요."]
+]},
+{ id:"mig-10", title:"플랫폼이 다를 때: XTTS (교차 플랫폼 TTS)", min:5, ref:[["MOS 2471245.1 · V4 Reduce Transportable Tablespace Downtime using Cross Platform Incremental Backup", MOS + "2471245.1"], ["Database Reference 19c · V$TRANSPORTABLE_PLATFORM", D + "refrn/V-TRANSPORTABLE_PLATFORM.html"]], body:[
+ ["p","AIX(빅 엔디안) → Linux(리틀 엔디안)처럼 바이트 순서가 다른 플랫폼으로 대용량 DB를 옮길 때, Data Pump 전체 이관은 너무 오래 걸립니다. **XTTS**는 데이터파일을 RMAN으로 변환해 옮기고, 증분 백업을 반복 적용해 최종 전환 다운타임을 줄입니다."],
+ ["code","sql","-- 양쪽 플랫폼의 엔디안 확인\nSELECT d.platform_name, tp.endian_format\nFROM   v$transportable_platform tp JOIN v$database d ON d.platform_name = tp.platform_name;"],
+ ["tbl",[["단계","하는 일","업무 영향"],["준비","원본에서 LEVEL 0 백업 → 대상 플랫폼 형식으로 변환·복원","없음 (업무 중)"],["증분 롤포워드 (반복)","원본 LEVEL 1 증분을 대상에 반복 적용해 차이를 줄임","없음"],["최종 전환","테이블스페이스 READ ONLY → 마지막 증분 적용 → 메타데이터(Data Pump) 이관","다운타임"],["사후","READ WRITE, 객체·권한·통계 확인","-"]]],
+ ["ul",["MOS 2471245.1의 V4 스크립트(xtt.properties, xttdriver.pl)를 쓰는 방식이 표준입니다.","옮길 테이블스페이스 집합이 자기 완결적인지(다른 곳의 객체를 참조하지 않는지) DBMS_TTS.TRANSPORT_SET_CHECK로 먼저 확인합니다.","SYSTEM·SYSAUX 등은 옮기지 않으므로 대상에 미리 DB를 만들어 두고 사용자·롤 등 메타데이터를 따로 옮깁니다."]],
+ ["tip","최종 전환 다운타임은 '마지막 증분 크기 + 메타데이터 이관 시간'입니다. 리허설 때 메타데이터 이관(객체 수가 많으면 오래 걸림) 시간을 꼭 따로 재 두세요."]
+]},
+{ id:"mig-11", title:"GoldenGate로 무중단 이관 개념", min:4, ref:[["Oracle GoldenGate Documentation", "https://docs.oracle.com/en/middleware/goldengate/core/index.html"]], body:[
+ ["p","GoldenGate는 원본 DB의 Redo를 읽어 변경분을 대상 DB에 계속 반영하는 복제 제품(별도 라이선스)입니다. 이관에서는 '초기 적재 + 변경분 동기화'로 다운타임을 몇 분 수준까지 줄이는 데 씁니다."],
+ ["tbl",[["구성요소","역할"],["Extract","원본 Redo에서 변경분 추출 (Integrated Extract는 DB 내부 LogMiner 사용)"],["Trail 파일","추출한 변경분을 담는 파일"],["Distribution / Pump","Trail을 대상 서버로 전송"],["Replicat","대상 DB에 변경분 적용"]]],
+ ["code","sql","-- 원본 DB 사전 설정 (예시)\nALTER DATABASE FORCE LOGGING;\nALTER DATABASE ADD SUPPLEMENTAL LOG DATA;\nALTER SYSTEM SET enable_goldengate_replication = TRUE SCOPE=BOTH SID='*';\nSELECT force_logging, supplemental_log_data_min FROM v$database;"],
+ ["ul",["흐름: ① Extract 시작(변경 기록 시작) → ② 특정 SCN 기준으로 초기 적재(Data Pump FLASHBACK_SCN 등) → ③ Replicat을 그 SCN 이후부터 적용 → ④ 지연 0 확인 후 애플리케이션 전환.","키(PK·UK)가 없는 테이블은 행을 정확히 찾기 어려워 성능·정합성 문제가 생깁니다. 사전 점검 항목입니다."]],
+ ["tip","GoldenGate 이관은 되돌림(역방향 복제)까지 구성할 수 있다는 것이 큰 장점입니다. 전환 후 문제가 생기면 원래 DB로 돌아갈 경로를 계획서에 넣을 수 있습니다."]
+]}],
+ quiz: [
+ { q: "실행 중인 Data Pump 작업에 붙어 상태를 보는 방법은?", o: ["expdp … attach=작업이름 후 STATUS", "lsnrctl status", "rman target /", "impdp … sqlfile="], a: 0, e: "attach로 붙으면 STATUS, PARALLEL 변경, STOP_JOB, KILL_JOB 등을 할 수 있습니다." },
+ { q: "DBA_DATAPUMP_JOBS에서 STATE = NOT RUNNING, ATTACHED_SESSIONS = 0인 작업이 남은 이유는?", o: ["정상 실행 중", "비정상 종료 등으로 마스터 테이블이 남음", "라이선스 만료", "Standby 전용 작업"], a: 1, e: "작업 소유자 스키마에 JOB_NAME과 같은 마스터 테이블이 남아 있습니다. 재사용 계획이 없으면 DROP … PURGE로 정리합니다." },
+ { q: "플랫폼 엔디안 형식을 확인하는 뷰는?", o: ["V$TRANSPORTABLE_PLATFORM", "V$VERSION", "V$INSTANCE", "DBA_REGISTRY"], a: 0, e: "ENDIAN_FORMAT이 Big/Little로 나옵니다. 다르면 데이터파일 변환이 필요합니다." },
+ { q: "XTTS(V4)가 다운타임을 줄이는 방법은?", o: ["Redo를 실시간 전송", "업무 중 LEVEL 0 변환·복원 후 증분 백업을 반복 적용하고, 최종 증분만 다운타임에 적용", "Data Pump 병렬도 증가", "스냅샷 복제"], a: 1, e: "대부분의 데이터 이동을 업무 중에 끝내고 마지막 차이만 전환 시점에 반영합니다." },
+ { q: "GoldenGate에서 대상 DB에 변경분을 적용하는 프로세스는?", o: ["Extract", "Replicat", "Pump", "Manager"], a: 1, e: "Extract가 추출하고, Trail로 전송된 변경분을 Replicat이 적용합니다." },
+ { q: "GoldenGate 원본 DB에서 필요한 사전 설정이 아닌 것은?", o: ["Supplemental logging", "ENABLE_GOLDENGATE_REPLICATION = TRUE", "Force logging (권장)", "RECYCLEBIN = OFF"], a: 3, e: "휴지통 설정은 GoldenGate 필수 설정과 관계없습니다." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    (ADD[id].lessons || []).forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz || []);
+  });
+})();
