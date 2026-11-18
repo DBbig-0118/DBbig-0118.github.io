@@ -227,6 +227,161 @@
       [3, 36233263, "RU", "APPLY", "SUCCESS", dv(2024, 6, 15, 3, 18), "Database Release Update : 19.23.0.0.240416", "19.22.0.0.0", "19.23.0.0.0"],
       [4, 36582781, "RU", "APPLY", "SUCCESS", dv(2024, 9, 28, 2, 55), "Database Release Update : 19.24.0.0.240716", "19.23.0.0.0", "19.24.0.0.0"],
       [4, 36414915, "INTERIM", "APPLY", "SUCCESS", dv(2024, 9, 28, 2, 58), "OJVM RELEASE UPDATE: 19.24.0.0.240716", "19.24.0.0.0", "19.24.0.0.0"]]);
+
+    /* ═════════ v0.1.1 실습 뷰 추가 — 리두·아카이브·FRA·복원지점·Undo·TEMP·휴지통·인덱스·제약조건·통계·리소스 한도 ═════════ */
+    function rnd(i) { var x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
+    function hod(v) { return (v - Math.floor(v)) * 24; }
+    function sec(v) { return Math.round(v * 86400) / 86400; }
+    function p2(n) { return (n < 10 ? "0" : "") + n; }
+    function fts(v) { var d = new Date(Math.round((v - H.D0) * 86400000)); return d.getUTCFullYear() + "-" + p2(d.getUTCMonth() + 1) + "-" + p2(d.getUTCDate()) + ":" + p2(d.getUTCHours()) + ":" + p2(d.getUTCMinutes()) + ":" + p2(d.getUTCSeconds()); }
+    function ymd(v) { return fts(v).slice(0, 10).replace(/-/g, "_"); }
+
+    /* ── 리두 멤버 ── */
+    db.run("CREATE TABLE V$LOGFILE (\"GROUP#\" INTEGER, STATUS VARCHAR2(7), TYPE VARCHAR2(7), MEMBER VARCHAR2(513), IS_RECOVERY_DEST_FILE VARCHAR2(3), CON_ID INTEGER)");
+    var LF = [], g;
+    for (g = 1; g <= 8; g++) LF.push([g, null, "ONLINE", "+DATAC1/DBBIG/ONLINELOG/group_" + g + "." + (270 + g) + ".11631004" + g, "NO", 0]);
+    LF.push([3, "INVALID", "ONLINE", "+RECOC1/DBBIG/ONLINELOG/group_3.301.1185012345", "YES", 0]);
+    for (g = 11; g <= 20; g++) LF.push([g, null, "STANDBY", "+DATAC1/DBBIG/ONLINELOG/group_" + g + "." + (280 + g) + ".1163100" + (50 + g), "NO", 0]);
+    ins("V$LOGFILE", ["GROUP#", "STATUS", "TYPE", "MEMBER", "IS_RECOVERY_DEST_FILE", "CON_ID"], LF);
+    db.run("UPDATE V$LOG SET MEMBERS = 2 WHERE \"GROUP#\" = 3");
+
+    /* ── 아카이브 로그 (최근 7일, 로컬 DEST 1 + Standby DEST 2) ── */
+    db.run("CREATE TABLE V$ARCHIVED_LOG (RECID INTEGER, NAME VARCHAR2(513), DEST_ID INTEGER, \"THREAD#\" INTEGER, \"SEQUENCE#\" INTEGER, FIRST_TIME DATE, NEXT_TIME DATE, BLOCKS INTEGER, BLOCK_SIZE INTEGER, STANDBY_DEST VARCHAR2(3), ARCHIVED VARCHAR2(3), APPLIED VARCHAR2(9), DELETED VARCHAR2(3), STATUS VARCHAR2(1), COMPLETION_TIME DATE, BACKUP_COUNT INTEGER)");
+    var LOGBLK = 4 * G / 512;
+    function thr(th, anchors, gap) {
+      var out = anchors.slice(), last = anchors[anchors.length - 1], s = last[0], f = last[1], n = 0;
+      while (f > now - 7) { var nf = sec(f - gap(hod(f - 0.004), s + n++)); s--; out.push([s, nf, f]); f = nf; }
+      return out;
+    }
+    var TH1 = thr(1, [[48213, T(-58 * MIN), T(-21 * MIN)], [48212, T(-2 * HR), T(-58 * MIN)], [48211, T(-3 * HR), T(-2 * HR)]], function (h, i) {
+      return (h >= 1 && h < 4 ? 12 + rnd(i) * 6 : h >= 9 && h < 18 ? 40 + rnd(i) * 30 : 70 + rnd(i) * 40) * MIN; });
+    var TH2 = thr(2, [[9312, T(-3.5 * HR), T(-80 * MIN)], [9311, T(-6 * HR), T(-3.5 * HR)], [9310, T(-9 * HR), T(-6 * HR)]], function (h, i) {
+      return (h >= 1 && h < 4 ? 20 + rnd(i + 500) * 10 : 150 + rnd(i + 500) * 50) * MIN; });
+    var AL = [];
+    [[1, TH1, 48211], [2, TH2, 9312]].forEach(function (t) {
+      t[1].forEach(function (r) {
+        var seqn = r[0], blocks = Math.round(LOGBLK * (0.9 + 0.09 * rnd(seqn * t[0]))), comp = sec(r[2] + (20 + rnd(seqn) * 60) / 86400);
+        var del = r[1] < now - 1.5, bc = comp < now - 6 * HR ? (comp < now - 1.5 ? 2 : 1) : 0;
+        AL.push([0, del ? null : "+RECOC1/DBBIG/ARCHIVELOG/" + ymd(r[2]) + "/thread_" + t[0] + "_seq_" + seqn + "." + (400 + seqn % 997) + ".1185" + (100000 + seqn % 89999), 1, t[0], seqn, r[1], r[2], blocks, 512, "NO", "YES", "NO", del ? "YES" : "NO", del ? "D" : "A", comp, bc]);
+        AL.push([0, "DBBIG_STBY", 2, t[0], seqn, r[1], r[2], blocks, 512, "YES", "YES", seqn >= t[2] ? "NO" : "YES", "NO", "A", sec(comp + 2 / 86400), 0]);
+      });
+    });
+    AL.sort(function (a, b) { return a[14] - b[14] || a[2] - b[2]; });
+    AL.forEach(function (r, i) { r[0] = 301200 + i; });
+    ins("V$ARCHIVED_LOG", ["RECID", "NAME", "DEST_ID", "THREAD#", "SEQUENCE#", "FIRST_TIME", "NEXT_TIME", "BLOCKS", "BLOCK_SIZE", "STANDBY_DEST", "ARCHIVED", "APPLIED", "DELETED", "STATUS", "COMPLETION_TIME", "BACKUP_COUNT"], AL);
+
+    /* ── FRA / 복원 지점 ── */
+    var archUsed = 0, archRec = 0, archN = 0;
+    AL.forEach(function (r) { if (r[2] === 1 && r[13] === "A") { var b = r[7] * 512; archUsed += b; archN++; if (r[15] >= 1) archRec += b; } });
+    var FRA_LIMIT = 3298534883328, ctlB = 268435456, redoB = 4 * G, bpB = Math.round(2.94 * G), bpRec = Math.round(2.31 * G);
+    var fbB = Math.max(40 * G, Math.round(0.97 * 471552 * M) - archUsed - ctlB - redoB - bpB), fbN = Math.ceil(fbB / G);
+    var fraUsed = archUsed + ctlB + redoB + bpB + fbB;
+    db.run("CREATE TABLE V$RECOVERY_FILE_DEST (NAME VARCHAR2(513), SPACE_LIMIT INTEGER, SPACE_USED INTEGER, SPACE_RECLAIMABLE INTEGER, NUMBER_OF_FILES INTEGER, CON_ID INTEGER)");
+    ins("V$RECOVERY_FILE_DEST", ["NAME", "SPACE_LIMIT", "SPACE_USED", "SPACE_RECLAIMABLE", "NUMBER_OF_FILES", "CON_ID"], [["+RECOC1", FRA_LIMIT, fraUsed, archRec + bpRec, archN + 1 + 1 + 14 + fbN, 0]]);
+    var pc = function (x) { return Math.round(x / FRA_LIMIT * 10000) / 100; };
+    db.run("CREATE TABLE V$RECOVERY_AREA_USAGE (FILE_TYPE VARCHAR2(23), PERCENT_SPACE_USED NUMBER, PERCENT_SPACE_RECLAIMABLE NUMBER, NUMBER_OF_FILES INTEGER, CON_ID INTEGER)");
+    ins("V$RECOVERY_AREA_USAGE", ["FILE_TYPE", "PERCENT_SPACE_USED", "PERCENT_SPACE_RECLAIMABLE", "NUMBER_OF_FILES", "CON_ID"], [
+      ["CONTROL FILE", pc(ctlB), 0, 1, 0], ["REDO LOG", pc(redoB), 0, 1, 0], ["ARCHIVED LOG", pc(archUsed), pc(archRec), archN, 0], ["BACKUP PIECE", pc(bpB), pc(bpRec), 14, 0],
+      ["IMAGE COPY", 0, 0, 0, 0], ["FLASHBACK LOG", pc(fbB), 0, fbN, 0], ["FOREIGN ARCHIVED LOG", 0, 0, 0, 0], ["AUXILIARY DATAFILE COPY", 0, 0, 0, 0]]);
+    db.run("CREATE TABLE V$RESTORE_POINT (SCN INTEGER, \"DATABASE_INCARNATION#\" INTEGER, GUARANTEE_FLASHBACK_DATABASE VARCHAR2(3), STORAGE_SIZE INTEGER, TIME DATE, PRESERVED VARCHAR2(3), NAME VARCHAR2(128), PDB_RESTORE_POINT VARCHAR2(3), CON_ID INTEGER)");
+    ins("V$RESTORE_POINT", ["SCN", "DATABASE_INCARNATION#", "GUARANTEE_FLASHBACK_DATABASE", "STORAGE_SIZE", "TIME", "PRESERVED", "NAME", "PDB_RESTORE_POINT", "CON_ID"], [
+      [98021344512, 2, "YES", fbB, dv(2024, 9, 28, 2, 31, 44), "YES", "BEFORE_RU_1924", "NO", 0],
+      [118837265001, 2, "NO", 0, T(-3 * DAY - 2 * HR), "NO", "BEFORE_BATCH_FIX", "NO", 0]]);
+    db.run("UPDATE V$DATABASE SET FLASHBACK_ON = 'RESTORE POINT ONLY'");
+
+    /* ── 리소스 한도 ── */
+    db.run("CREATE TABLE GV$RESOURCE_LIMIT (INST_ID INTEGER, RESOURCE_NAME VARCHAR2(30), CURRENT_UTILIZATION INTEGER, MAX_UTILIZATION INTEGER, INITIAL_ALLOCATION VARCHAR2(10), LIMIT_VALUE VARCHAR2(10), CON_ID INTEGER)");
+    var lp = function (x) { return ("          " + x).slice(-10); };
+    ins("GV$RESOURCE_LIMIT", ["INST_ID", "RESOURCE_NAME", "CURRENT_UTILIZATION", "MAX_UTILIZATION", "INITIAL_ALLOCATION", "LIMIT_VALUE", "CON_ID"], [
+      [1, "processes", 1712, 1846, lp(2000), lp(2000), 0], [1, "sessions", 1745, 1903, lp(3022), lp(3022), 0], [1, "enqueue_locks", 412, 1688, lp(36296), lp(36296), 0],
+      [1, "transactions", 210, 655, lp(3324), lp("UNLIMITED"), 0], [1, "parallel_max_servers", 16, 64, lp(320), lp(32767), 0],
+      [2, "processes", 934, 1210, lp(2000), lp(2000), 0], [2, "sessions", 951, 1236, lp(3022), lp(3022), 0], [2, "enqueue_locks", 280, 1102, lp(36296), lp(36296), 0],
+      [2, "transactions", 96, 402, lp(3324), lp("UNLIMITED"), 0], [2, "parallel_max_servers", 8, 32, lp(320), lp(32767), 0]]);
+    db.run("CREATE VIEW V$RESOURCE_LIMIT AS SELECT RESOURCE_NAME, CURRENT_UTILIZATION, MAX_UTILIZATION, INITIAL_ALLOCATION, LIMIT_VALUE, CON_ID FROM GV$RESOURCE_LIMIT WHERE INST_ID = 1");
+
+    /* ── Undo 통계 (1번 인스턴스, 10분 × 144 = 최근 24시간) ── */
+    db.run("CREATE TABLE V$UNDOSTAT (BEGIN_TIME DATE, END_TIME DATE, UNDOTSN INTEGER, UNDOBLKS INTEGER, TXNCOUNT INTEGER, MAXQUERYLEN INTEGER, MAXQUERYID VARCHAR2(13), MAXCONCURRENCY INTEGER, UNXPSTEALCNT INTEGER, EXPSTEALCNT INTEGER, SSOLDERRCNT INTEGER, NOSPACEERRCNT INTEGER, ACTIVEBLKS INTEGER, UNEXPIREDBLKS INTEGER, EXPIREDBLKS INTEGER, TUNED_UNDORETENTION INTEGER)");
+    var US = [], b10 = sec(Math.floor(now * 144) / 144), peakDone = false, QIDS = ["3ab9wz1kq0c5d", "9cz0d4k2tf1nb", "8f2kx7m1qz9ab", "5h7tq0wz3k2ma", "7yq2mm4h0p8xs", "6mm1n0b8v7c2x"];
+    for (var k = 143; k >= 0; k--) {
+      var bt = sec(b10 - k / 144), et = sec(bt + 600 / 86400), hh = hod(bt), batch = hh >= 1 && hh < 4, work = hh >= 9 && hh < 18, err = k === 30 || k === 31;
+      var ub = Math.round(batch ? 52000 + rnd(k) * 37000 : work ? 6000 + rnd(k) * 5000 : 1500 + rnd(k) * 2500);
+      if (batch && !peakDone) { ub = 90123; peakDone = true; }
+      var mq = err ? 14520 - (k - 30) * 600 : Math.round(batch ? 2400 + rnd(k + 7) * 1800 : work ? 300 + rnd(k + 7) * 900 : 120 + rnd(k + 7) * 600);
+      var tuned = err ? (k === 31 ? 9120 : 9840) : Math.max(10800, mq + 300 + Math.round(rnd(k + 3) * 900));
+      var act = Math.round(ub * (batch ? 2.2 : 0.4)), expd = err ? 0 : Math.round(600000 + rnd(k + 11) * 400000);
+      US.push([bt, et, 2, ub, Math.round(batch ? 900 + rnd(k) * 600 : work ? 25000 + rnd(k) * 15000 : 4000 + rnd(k) * 3000), mq, err ? "b7r2kq9wd1x3n" : QIDS[k % QIDS.length],
+        Math.round(batch ? 12 + rnd(k) * 28 : work ? 30 + rnd(k) * 50 : 5 + rnd(k) * 10), err ? (k === 31 ? 14 : 22) : 0, 0, err ? (k === 31 ? 1 : 2) : 0, 0, act, 3932160 - expd - act - 50000, expd, tuned]);
+    }
+    ins("V$UNDOSTAT", ["BEGIN_TIME", "END_TIME", "UNDOTSN", "UNDOBLKS", "TXNCOUNT", "MAXQUERYLEN", "MAXQUERYID", "MAXCONCURRENCY", "UNXPSTEALCNT", "EXPSTEALCNT", "SSOLDERRCNT", "NOSPACEERRCNT", "ACTIVEBLKS", "UNEXPIREDBLKS", "EXPIREDBLKS", "TUNED_UNDORETENTION"], US);
+
+    /* ── TEMP 사용 ── */
+    db.run("CREATE TABLE GV$TEMPSEG_USAGE (INST_ID INTEGER, USERNAME VARCHAR2(128), SESSION_ADDR VARCHAR2(16), SESSION_NUM INTEGER, SQL_ID VARCHAR2(13), TABLESPACE VARCHAR2(31), CONTENTS VARCHAR2(9), SEGTYPE VARCHAR2(9), EXTENTS INTEGER, BLOCKS INTEGER, CON_ID INTEGER)");
+    var sessAt = {};
+    db.exec("SELECT INST_ID, SID, SADDR, \"SERIAL#\", USERNAME, SQL_ID FROM GV$SESSION")[0].values.forEach(function (r) { sessAt[r[0] + ":" + r[1]] = r; });
+    var TU = [[2, 266, "SORT", 5242880], [1, 902, "HASH", 1572864], [2, 377, "HASH", 786432], [1, 801, "SORT", 262144], [1, 801, "HASH", 393216], [1, 845, "SORT", 128]];
+    ins("GV$TEMPSEG_USAGE", ["INST_ID", "USERNAME", "SESSION_ADDR", "SESSION_NUM", "SQL_ID", "TABLESPACE", "CONTENTS", "SEGTYPE", "EXTENTS", "BLOCKS", "CON_ID"], TU.map(function (t) {
+      var s = sessAt[t[0] + ":" + t[1]]; return [t[0], s[4], s[2], s[3], s[5], "TEMP", "TEMPORARY", t[2], Math.max(1, t[3] / 128), t[3], 0]; }));
+    db.run("CREATE VIEW V$TEMPSEG_USAGE AS SELECT USERNAME, SESSION_ADDR, SESSION_NUM, SQL_ID, TABLESPACE, CONTENTS, SEGTYPE, EXTENTS, BLOCKS, CON_ID FROM GV$TEMPSEG_USAGE WHERE INST_ID = 1");
+
+    /* ── 휴지통 ── */
+    db.run("CREATE TABLE DBA_RECYCLEBIN (OWNER VARCHAR2(128), OBJECT_NAME VARCHAR2(128), ORIGINAL_NAME VARCHAR2(128), OPERATION VARCHAR2(9), TYPE VARCHAR2(25), TS_NAME VARCHAR2(30), CREATETIME VARCHAR2(19), DROPTIME VARCHAR2(19), DROPSCN INTEGER, PARTITION_NAME VARCHAR2(128), CAN_UNDROP VARCHAR2(3), CAN_PURGE VARCHAR2(3), RELATED INTEGER, BASE_OBJECT INTEGER, PURGE_OBJECT INTEGER, SPACE INTEGER)");
+    var RB = [ // owner, bin name, original, type, ts, created, dropped, undrop, related/base, purge_obj, blocks
+      ["APP_OWNER", "BIN$Kx1zQ0pTRk6bVw2d8mN4aQ==$0", "ORDERS_BAK_20241101", "TABLE", "APP_DATA", dv(2024, 11, 1, 22, 10, 5), T(-40 * DAY - 3 * HR), "YES", 91201, 91201, 196608],
+      ["APP_OWNER", "BIN$Pq8rT2vYQ0Gm3c1x7kL9bA==$0", "IX_ORDERS_BAK_01", "NORMAL INDEX", "APP_DATA", dv(2024, 11, 1, 22, 31, 40), T(-40 * DAY - 3 * HR), "NO", 91201, 91202, 32768],
+      ["APP_OWNER", "BIN$Zr4mW8nXR2ukP1s6aT0hcQ==$0", "ORDER_ITEMS_TMP", "TABLE", "APP_DATA", T(-6 * DAY - 5 * HR), T(-0.2 * DAY), "YES", 93310, 93310, 32768],
+      ["APP_OWNER", "BIN$Hn2qL5yVS9eJ4d7b0wR3fg==$0", "PK_ORDER_ITEMS_TMP", "NORMAL INDEX", "APP_DATA", T(-6 * DAY - 5 * HR), T(-0.2 * DAY), "NO", 93310, 93311, 8192],
+      ["ETL_USER", "BIN$Ab3cD4eFG5hI6jK7lM8nOw==$0", "STG_ORDERS", "TABLE", "HIST_DATA", T(-0.9 * DAY), T(-0.5 * DAY), "YES", 95120, 95120, 393216],
+      ["ETL_USER", "BIN$Qw1eR2tYU3iO4pA5sD6fGg==$0", "STG_ORDERS", "TABLE", "HIST_DATA", T(-1.9 * DAY), T(-1.5 * DAY), "YES", 95044, 95044, 380928],
+      ["ETL_USER", "BIN$Zx9cV8bNM7lK6jH5gF4dSa==$0", "STG_ORDERS", "TABLE", "HIST_DATA", T(-2.9 * DAY), T(-2.5 * DAY), "YES", 94970, 94970, 401408],
+      ["HR", "BIN$Lp0oK9iJU8hY7gT6fR5eDw==$0", "EMP_BACKUP", "TABLE", "USERS", dv(2025, 3, 2, 10, 0, 0), T(-200 * DAY), "YES", 88012, 88012, 1024]];
+    ins("DBA_RECYCLEBIN", ["OWNER", "OBJECT_NAME", "ORIGINAL_NAME", "OPERATION", "TYPE", "TS_NAME", "CREATETIME", "DROPTIME", "DROPSCN", "PARTITION_NAME", "CAN_UNDROP", "CAN_PURGE", "RELATED", "BASE_OBJECT", "PURGE_OBJECT", "SPACE"],
+      RB.map(function (r, i) { return [r[0], r[1], r[2], "DROP", r[3], r[4], fts(r[5]), fts(r[6]), 118800000000 + Math.round((r[6] - dv(2026, 1, 1)) * 2.1e5) + i, null, r[7], "YES", r[8], r[8], r[9], r[10]]; }));
+
+    /* ── 인덱스 · 제약조건 · 통계 (APP_OWNER) ── */
+    ins("DBA_SEGMENTS", ["OWNER", "SEGMENT_NAME", "PARTITION_NAME", "SEGMENT_TYPE", "TABLESPACE_NAME", "BYTES", "BLOCKS", "EXTENTS"], [
+      ["APP_OWNER", "PK_CUSTOMERS", null, "INDEX", "APP_DATA", 192 * M, 192 * 128, 24], ["APP_OWNER", "PK_PRODUCTS", null, "INDEX", "APP_DATA", 2 * M, 256, 1]]);
+    db.run("CREATE TABLE DBA_INDEXES (OWNER VARCHAR2(128), INDEX_NAME VARCHAR2(128), INDEX_TYPE VARCHAR2(27), TABLE_OWNER VARCHAR2(128), TABLE_NAME VARCHAR2(128), UNIQUENESS VARCHAR2(9), TABLESPACE_NAME VARCHAR2(30), STATUS VARCHAR2(8), PARTITIONED VARCHAR2(3), VISIBILITY VARCHAR2(9), BLEVEL INTEGER, LEAF_BLOCKS INTEGER, DISTINCT_KEYS INTEGER, CLUSTERING_FACTOR INTEGER, NUM_ROWS INTEGER, LAST_ANALYZED DATE)");
+    var IX = [ // name, table, unique, ts, status, blevel, leaf, distinct, cf, rows, analyzed(rel days), cols
+      ["PK_ORDERS", "ORDERS", "UNIQUE", "APP_IDX", "VALID", 3, 540000, 180000000, 2701330, 180000000, -9, ["ORDER_ID"]],
+      ["IX_ORDERS_01", "ORDERS", "NONUNIQUE", "APP_IDX", "VALID", 3, 720000, 179500000, 160233871, 180000000, -9, ["CUST_ID", "ORDER_DT"]],
+      ["PK_ORDER_ITEMS", "ORDER_ITEMS", "UNIQUE", "APP_IDX", "VALID", 3, 1100000, 520000000, 5208771, 520000000, -2, ["ORDER_ID", "ITEM_NO"]],
+      ["IX_ORDER_ITEMS_01", "ORDER_ITEMS", "NONUNIQUE", "APP_IDX", "VALID", 3, 1350000, 48000, 410552013, 520000000, -2, ["PRODUCT_ID"]],
+      ["IX_PAYMENTS_01", "PAYMENTS", "NONUNIQUE", "APP_IDX", "VALID", 2, 180000, 95000000, 1702210, 95000000, -120, ["PAY_DT", "ORDER_ID"]],
+      ["PK_CUSTOMERS", "CUSTOMERS", "UNIQUE", "APP_DATA", "VALID", 2, 21000, 12000000, 380412, 12000000, -2, ["CUST_ID"]],
+      ["PK_PRODUCTS", "PRODUCTS", "UNIQUE", "APP_DATA", "VALID", 1, 120, 48000, 2911, 48000, -30, ["PRODUCT_ID"]],
+      ["IX_ORDERS_HIST_G01", "ORDERS_HIST", "NONUNIQUE", "HIST_DATA", "UNUSABLE", 3, 2100000, 1520000000, 30110222, 1520000000, -1, ["ORDER_ID"]],
+      ["IX_BATCH_LOG_01", "BATCH_LOG", "NONUNIQUE", "USERS", "UNUSABLE", 1, 60, 15000, 15210, 15000, -200, ["RUN_DT"]]];
+    ins("DBA_INDEXES", ["OWNER", "INDEX_NAME", "INDEX_TYPE", "TABLE_OWNER", "TABLE_NAME", "UNIQUENESS", "TABLESPACE_NAME", "STATUS", "PARTITIONED", "VISIBILITY", "BLEVEL", "LEAF_BLOCKS", "DISTINCT_KEYS", "CLUSTERING_FACTOR", "NUM_ROWS", "LAST_ANALYZED"],
+      IX.map(function (x) { return ["APP_OWNER", x[0], "NORMAL", "APP_OWNER", x[1], x[2], x[3], x[4], "NO", "VISIBLE", x[5], x[6], x[7], x[8], x[9], sec(day0 + x[10] + 22 * HR + 7 * MIN)]; }));
+    db.run("CREATE TABLE DBA_IND_COLUMNS (INDEX_OWNER VARCHAR2(128), INDEX_NAME VARCHAR2(128), TABLE_OWNER VARCHAR2(128), TABLE_NAME VARCHAR2(128), COLUMN_NAME VARCHAR2(4000), COLUMN_POSITION INTEGER, DESCEND VARCHAR2(4))");
+    var IC = [];
+    IX.forEach(function (x) { x[11].forEach(function (c, i) { IC.push(["APP_OWNER", x[0], "APP_OWNER", x[1], c, i + 1, "ASC"]); }); });
+    ins("DBA_IND_COLUMNS", ["INDEX_OWNER", "INDEX_NAME", "TABLE_OWNER", "TABLE_NAME", "COLUMN_NAME", "COLUMN_POSITION", "DESCEND"], IC);
+    db.run("CREATE TABLE DBA_CONSTRAINTS (OWNER VARCHAR2(128), CONSTRAINT_NAME VARCHAR2(128), CONSTRAINT_TYPE VARCHAR2(1), TABLE_NAME VARCHAR2(128), R_OWNER VARCHAR2(128), R_CONSTRAINT_NAME VARCHAR2(128), DELETE_RULE VARCHAR2(9), STATUS VARCHAR2(8), VALIDATED VARCHAR2(13), INDEX_NAME VARCHAR2(128))");
+    db.run("CREATE TABLE DBA_CONS_COLUMNS (OWNER VARCHAR2(128), CONSTRAINT_NAME VARCHAR2(128), TABLE_NAME VARCHAR2(128), COLUMN_NAME VARCHAR2(4000), POSITION INTEGER)");
+    var CN = [ // name, type, table, r_cons, delete_rule, index, cols
+      ["PK_ORDERS", "P", "ORDERS", null, null, "PK_ORDERS", ["ORDER_ID"]], ["PK_ORDER_ITEMS", "P", "ORDER_ITEMS", null, null, "PK_ORDER_ITEMS", ["ORDER_ID", "ITEM_NO"]],
+      ["PK_CUSTOMERS", "P", "CUSTOMERS", null, null, "PK_CUSTOMERS", ["CUST_ID"]], ["PK_PRODUCTS", "P", "PRODUCTS", null, null, "PK_PRODUCTS", ["PRODUCT_ID"]],
+      ["FK_ORDERS_CUST", "R", "ORDERS", "PK_CUSTOMERS", "NO ACTION", null, ["CUST_ID"]], ["FK_ITEMS_ORDER", "R", "ORDER_ITEMS", "PK_ORDERS", "CASCADE", null, ["ORDER_ID"]],
+      ["FK_ITEMS_PROD", "R", "ORDER_ITEMS", "PK_PRODUCTS", "NO ACTION", null, ["PRODUCT_ID"]], ["FK_PAY_ORDER", "R", "PAYMENTS", "PK_ORDERS", "NO ACTION", null, ["ORDER_ID"]],
+      ["FK_HIST_CUST", "R", "ORDERS_HIST", "PK_CUSTOMERS", "NO ACTION", null, ["CUST_ID"]],
+      ["CK_ORDERS_STATUS", "C", "ORDERS", null, null, null, ["STATUS"]], ["SYS_C0012871", "C", "ORDERS", null, null, null, ["ORDER_DT"]], ["SYS_C0012904", "C", "PAYMENTS", null, null, null, ["ORDER_ID"]]];
+    ins("DBA_CONSTRAINTS", ["OWNER", "CONSTRAINT_NAME", "CONSTRAINT_TYPE", "TABLE_NAME", "R_OWNER", "R_CONSTRAINT_NAME", "DELETE_RULE", "STATUS", "VALIDATED", "INDEX_NAME"],
+      CN.map(function (c) { return ["APP_OWNER", c[0], c[1], c[2], c[3] ? "APP_OWNER" : null, c[3], c[4], "ENABLED", "VALIDATED", c[5]]; }));
+    var CC = [];
+    CN.forEach(function (c) { c[6].forEach(function (col, i) { CC.push(["APP_OWNER", c[0], c[2], col, c[1] === "C" ? null : i + 1]); }); });
+    ins("DBA_CONS_COLUMNS", ["OWNER", "CONSTRAINT_NAME", "TABLE_NAME", "COLUMN_NAME", "POSITION"], CC);
+    db.run("CREATE TABLE DBA_TAB_STATISTICS (OWNER VARCHAR2(128), TABLE_NAME VARCHAR2(128), PARTITION_NAME VARCHAR2(128), PARTITION_POSITION INTEGER, OBJECT_TYPE VARCHAR2(12), NUM_ROWS INTEGER, BLOCKS INTEGER, AVG_ROW_LEN INTEGER, LAST_ANALYZED DATE, STALE_STATS VARCHAR2(7), STATTYPE_LOCKED VARCHAR2(5))");
+    var TSx = [ // owner, table, part, pos, type, rows, blocks, avglen, analyzed(rel days|null), stale, locked
+      ["APP_OWNER", "ORDERS", null, null, "TABLE", 180000000, 2752512, 112, -9, "YES", null], ["APP_OWNER", "ORDER_ITEMS", null, null, "TABLE", 520000000, 4980736, 70, -2, "NO", null],
+      ["APP_OWNER", "CUSTOMERS", null, null, "TABLE", 12000000, 393216, 210, -2, "NO", null], ["APP_OWNER", "PAYMENTS", null, null, "TABLE", null, null, null, null, null, null],
+      ["APP_OWNER", "PRODUCTS", null, null, "TABLE", 48000, 32768, 380, -30, "NO", null], ["APP_OWNER", "ORDERS_HIST", null, null, "TABLE", 1520000000, 58720256, 260, -1, "NO", null],
+      ["APP_OWNER", "ORDERS_HIST", "P202409", 1, "PARTITION", 290000000, 11796480, 258, -1, "NO", null], ["APP_OWNER", "ORDERS_HIST", "P202410", 2, "PARTITION", 310000000, 12582912, 259, -1, "NO", null],
+      ["APP_OWNER", "ORDERS_HIST", "P202411", 3, "PARTITION", 322000000, 13107200, 260, -1, "NO", null], ["APP_OWNER", "ORDERS_HIST", "P202412", 4, "PARTITION", 351000000, 14286848, 261, -1, "NO", null],
+      ["APP_OWNER", "ORDERS_HIST", "P202501", 5, "PARTITION", 98000000, 6946816, 262, -31, "YES", null], ["APP_OWNER", "BATCH_LOG", null, null, "TABLE", 15000, 15360, 96, -200, "YES", "ALL"],
+      ["HR", "EMPLOYEES", null, null, "TABLE", 107, 5, 69, -60, "NO", null]];
+    ins("DBA_TAB_STATISTICS", ["OWNER", "TABLE_NAME", "PARTITION_NAME", "PARTITION_POSITION", "OBJECT_TYPE", "NUM_ROWS", "BLOCKS", "AVG_ROW_LEN", "LAST_ANALYZED", "STALE_STATS", "STATTYPE_LOCKED"],
+      TSx.map(function (t) { return [t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8] === null ? null : sec(day0 + t[8] + 22 * HR + 14 * MIN), t[9], t[10]]; }));
   }
   root.DBBIG_SCHEMA = build;
 })(typeof window !== "undefined" ? window : globalThis);

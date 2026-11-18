@@ -1316,3 +1316,136 @@ mig: { lessons: [
     c.quiz = c.quiz.concat(ADD[id].quiz);
   });
 })();
+
+/* ───────── v0.1.1 보강: 딕셔너리 뷰 실습과 이어지는 레슨 6개 + 퀴즈 ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+arch: { lessons: [
+{ id:"arch-21", title:"리두 로그 그룹·멤버 추가와 삭제", min:5, ref:[["Administrator's Guide 19c · Managing the Redo Log", D + "admin/managing-the-redo-log.html"], ["Database Reference 19c · V$LOGFILE", D + "refrn/V-LOGFILE.html"]], body:[
+ ["p","리두 로그를 키우거나(크기 변경), 멤버를 다중화하거나, 그룹 수를 늘릴 때 쓰는 작업입니다. 리두 로그 파일 크기는 바꿀 수 없어서 '새 크기로 그룹 추가 → 옛 그룹 삭제' 순서로 진행합니다."],
+ ["code","sql","-- STEP 1. 현재 상태 (그룹 단위 + 멤버 단위)\nSELECT thread#, group#, sequence#, bytes/1024/1024/1024 gb, members, archived, status FROM v$log ORDER BY thread#, group#;\nSELECT group#, type, status, member FROM v$logfile ORDER BY group#, member;\n\n-- STEP 2. 새 그룹 추가 (RAC는 스레드를 꼭 지정)\nALTER DATABASE ADD LOGFILE THREAD 1 GROUP 9  ('+DATAC1') SIZE 8G;\nALTER DATABASE ADD LOGFILE THREAD 2 GROUP 10 ('+DATAC1') SIZE 8G;\n\n-- 기존 그룹에 멤버 추가 (다중화)\nALTER DATABASE ADD LOGFILE MEMBER '+RECOC1' TO GROUP 3;\n\n-- STEP 3. 옛 그룹을 비우기: 로그 스위치 + 체크포인트\nALTER SYSTEM ARCHIVE LOG CURRENT;   -- RAC 전체 스레드 스위치·아카이브\nALTER SYSTEM CHECKPOINT GLOBAL;\n\n-- STEP 4. INACTIVE 이고 ARCHIVED = YES 인 그룹만 삭제 가능\nALTER DATABASE DROP LOGFILE GROUP 1;"],
+ ["ul",["CURRENT·ACTIVE 그룹은 지울 수 없습니다. 스위치와 체크포인트 후 INACTIVE가 될 때까지 기다리세요.","스레드마다 최소 2개 그룹은 남아 있어야 합니다.","새로 추가한 멤버는 그 그룹이 다음에 쓰일 때까지 V$LOGFILE.STATUS가 INVALID로 보입니다. 정상입니다.","ASM(OMF) 환경에서는 DROP LOGFILE GROUP 하면 파일도 같이 지워집니다. 파일시스템이면 OS 파일은 따로 지웁니다."]],
+ ["tip","Data Guard를 쓰면 Standby Redo Log(SRL)도 온라인 리두와 같은 크기로 맞춰야 합니다. 19c Data Guard 문서는 스레드마다 온라인 리두 그룹보다 하나 더 많은 SRL 그룹을 권장합니다. 실습 SQL 문제 d21에서 멤버 상태를 직접 조회해 보세요."]
+]}],
+ quiz: [
+ { q: "V$LOGFILE.STATUS가 INVALID인 멤버의 흔한 원인은?", o: ["파일이 손상됨", "새로 추가되어 아직 한 번도 쓰이지 않음", "아카이브 실패", "Standby 전용 파일"], a: 1, e: "추가된 멤버는 그 그룹이 다시 CURRENT가 되어 쓰이기 전까지 INVALID로 표시됩니다." },
+ { q: "리두 로그 그룹을 삭제할 수 있는 조건은?", o: ["CURRENT 상태", "ACTIVE 상태", "INACTIVE이고 아카이브 완료", "멤버가 2개 이상"], a: 2, e: "인스턴스 복구에 필요 없고(INACTIVE) 아카이브가 끝난 그룹만 삭제할 수 있습니다." },
+ { q: "spfile로 기동한 인스턴스에서 ALTER SYSTEM SET의 SCOPE를 생략하면?", o: ["MEMORY", "SPFILE", "BOTH", "에러"], a: 2, e: "spfile로 기동했다면 SCOPE 기본값은 BOTH입니다(pfile 기동이면 MEMORY)." },
+ { q: "ALTER SYSTEM RESET 파라미터명 SCOPE=SPFILE 의 효과는?", o: ["값을 0으로 만든다", "spfile에서 해당 항목을 지워 기본값으로 되돌린다", "메모리 값만 초기화한다", "pfile을 다시 만든다"], a: 1, e: "spfile에서 항목을 제거하므로 다음 기동부터 기본값이 적용됩니다." },
+ { q: "ASMM 환경에서 SGA 구성요소가 자동으로 늘고 줄어든 이력을 보는 뷰는?", o: ["V$SGASTAT", "V$SGA_RESIZE_OPS", "V$PGASTAT", "V$SGA_TARGET_ADVICE"], a: 1, e: "V$SGA_RESIZE_OPS에 구성요소별 GROW/SHRINK 이력이 남습니다." },
+ { q: "공유 서버(Shared Server) 방식에서 세션의 UGA가 놓이는 곳은?", o: ["서버 프로세스의 PGA", "SGA (Large Pool이 있으면 Large Pool)", "TEMP 테이블스페이스", "Redo Log Buffer"], a: 1, e: "공유 서버는 여러 프로세스가 세션을 나눠 처리하므로 UGA를 SGA에 둡니다. 전용 서버는 PGA에 둡니다." }
+]},
+space: { lessons: [
+{ id:"space-10", title:"휴지통(Recycle Bin)과 Flashback Drop", min:5, ref:[["Administrator's Guide 19c · Using Flashback Drop and Managing the Recycle Bin", D + "admin/managing-tables.html"], ["Database Reference 19c · DBA_RECYCLEBIN", D + "refrn/DBA_RECYCLEBIN.html"]], body:[
+ ["p","RECYCLEBIN 파라미터가 ON(기본)이면 DROP TABLE한 테이블은 바로 지워지지 않고 BIN$로 시작하는 이름으로 바뀌어 휴지통에 남습니다. 딸린 인덱스·트리거·제약조건도 함께 들어갑니다."],
+ ["code","sql","-- 휴지통 내용 (DROPTIME은 'YYYY-MM-DD:HH24:MI:SS' 형식의 문자열)\nSELECT owner, original_name, object_name, type, droptime, can_undrop, space\nFROM   dba_recyclebin ORDER BY droptime DESC;\n\n-- 되살리기\nFLASHBACK TABLE app_owner.order_items_tmp TO BEFORE DROP;\n-- 이름이 이미 있으면 다른 이름으로\nFLASHBACK TABLE app_owner.order_items_tmp TO BEFORE DROP RENAME TO order_items_tmp_old;\n-- 같은 원래 이름이 여러 개면 BIN$ 이름으로 특정 버전 지정\nFLASHBACK TABLE \"BIN$Qw1eR2tYU3iO4pA5sD6fGg==$0\" TO BEFORE DROP;\n\n-- 비우기\nPURGE TABLE app_owner.orders_bak_20241101;\nPURGE TABLESPACE app_data USER etl_user;\nPURGE DBA_RECYCLEBIN;                       -- 전체 (SYSDBA 또는 PURGE DBA_RECYCLEBIN 권한)\n\n-- 휴지통을 거치지 않고 바로 삭제\nDROP TABLE etl_user.stg_orders PURGE;"],
+ ["ul",["되살린 테이블에 딸린 인덱스는 BIN$ 이름 그대로 돌아옵니다. ALTER INDEX … RENAME TO 로 원래 이름을 붙여 주세요.","TRUNCATE된 데이터는 휴지통으로 복구할 수 없습니다(OPERATION = TRUNCATE).","휴지통 객체의 공간은 DBA_FREE_SPACE에서 여유 공간처럼 보이고, 테이블스페이스 공간이 모자라면 오라클이 오래된 것부터 자동으로 비웁니다.","SYSTEM 테이블스페이스의 객체는 휴지통에 들어가지 않습니다."]],
+ ["tip","\"방금 테이블을 지웠어요!\" 전화가 오면 먼저 DBA_RECYCLEBIN을 보고, 그다음 Flashback Query/Database, 마지막으로 RMAN 복구 순서로 검토합니다. 실습 SQL 문제 d27·d28이 이 상황입니다."]
+]}],
+ quiz: [
+ { q: "DBA_RECYCLEBIN.DROPTIME 컬럼의 데이터 타입은?", o: ["DATE", "TIMESTAMP", "VARCHAR2 (문자열)", "NUMBER"], a: 2, e: "CREATETIME·DROPTIME은 VARCHAR2(19)라 시간 비교를 하려면 TO_DATE(droptime, 'YYYY-MM-DD:HH24:MI:SS')로 바꿔야 합니다." },
+ { q: "DROP된 테이블을 휴지통에서 되살리는 명령은?", o: ["UNDROP TABLE t", "FLASHBACK TABLE t TO BEFORE DROP", "RECOVER TABLE t", "ALTER TABLE t RESTORE"], a: 1, e: "FLASHBACK TABLE … TO BEFORE DROP으로 되살리고, 필요하면 RENAME TO로 다른 이름을 줍니다." },
+ { q: "휴지통에서 되살린 테이블의 인덱스 이름은?", o: ["원래 이름으로 자동 복원", "BIN$ 이름 그대로", "SYS_C로 시작하는 이름", "인덱스는 복원되지 않음"], a: 1, e: "인덱스는 BIN$ 이름으로 돌아오므로 ALTER INDEX … RENAME TO로 이름을 되돌려야 합니다." },
+ { q: "휴지통을 거치지 않고 테이블을 바로 지우는 방법은?", o: ["DROP TABLE t PURGE", "DROP TABLE t FORCE", "TRUNCATE TABLE t DROP", "DELETE FROM t"], a: 0, e: "PURGE를 붙이면 휴지통에 남기지 않고 즉시 공간을 반환합니다. 되살릴 수 없으니 신중히 씁니다." },
+ { q: "온라인 데이터파일 이동(ALTER DATABASE MOVE DATAFILE) 중 필요한 것은?", o: ["DB 재기동", "대상 위치에 파일 크기만큼의 추가 공간", "테이블스페이스 OFFLINE", "RMAN 백업"], a: 1, e: "원본과 대상이 동시에 존재하는 동안 대상에 같은 크기의 공간이 필요합니다." },
+ { q: "월 파티션 이력 테이블에서 오래된 달 데이터를 가장 효율적으로 지우는 방법은?", o: ["DELETE ... WHERE order_dt < ...", "ALTER TABLE ... DROP PARTITION (또는 TRUNCATE PARTITION)", "CTAS 후 RENAME", "SHRINK SPACE"], a: 1, e: "파티션 단위 DROP/TRUNCATE는 DELETE와 달리 대량의 Undo·Redo를 만들지 않습니다. 전역 인덱스는 UPDATE GLOBAL INDEXES로 유지합니다." }
+]},
+rman: { lessons: [
+{ id:"rman-10", title:"FRA 모니터링: 사용률·파일 유형·디스크그룹", min:5, ref:[["Backup and Recovery User's Guide 19c · Maintaining the Fast Recovery Area", D + "bradv/index.html"], ["Database Reference 19c · V$RECOVERY_AREA_USAGE", D + "refrn/V-RECOVERY_AREA_USAGE.html"]], body:[
+ ["p","FRA(Fast Recovery Area)가 가득 차면 아카이브를 만들 수 없어 ORA-00257 류의 에러와 함께 DB가 멈춥니다. 세 가지를 같이 봐야 합니다."],
+ ["code","sql","-- ① FRA 전체: 한도·사용·회수 가능\nSELECT name, ROUND(space_limit/1024/1024/1024) limit_gb, ROUND(space_used/1024/1024/1024,1) used_gb,\n       ROUND(space_used/space_limit*100,1) used_pct, ROUND(space_reclaimable/space_limit*100,1) reclaim_pct\nFROM   v$recovery_file_dest;\n\n-- ② 파일 유형별 (어디서 차고 있나)\nSELECT file_type, percent_space_used, percent_space_reclaimable, number_of_files\nFROM   v$recovery_area_usage ORDER BY percent_space_used DESC;\n\n-- ③ FRA가 놓인 디스크그룹의 실제 여유 (grid / ASM)\nSELECT name, total_mb, free_mb, required_mirror_free_mb, usable_file_mb FROM v$asm_diskgroup;"],
+ ["tbl",[["보이는 현상","먼저 의심할 것"],["ARCHIVED LOG가 크고 RECLAIMABLE도 큼","정상 — 공간이 필요하면 오라클이 백업된 아카이브부터 지움"],["ARCHIVED LOG가 크고 RECLAIMABLE이 작음","아카이브 백업 실패, 또는 Standby 미적용으로 삭제 정책(APPLIED ON STANDBY)에 막힘"],["FLASHBACK LOG가 크고 RECLAIMABLE 0","잊힌 보장 복원 지점(GRP) — V$RESTORE_POINT 확인"],["FRA %는 낮은데 디스크그룹 USABLE_FILE_MB 음수","DB_RECOVERY_FILE_DEST_SIZE가 디스크그룹 실제 용량보다 큼"]]],
+ ["code","rman","# 급할 때: 백업된 아카이브 정리 (보존정책·삭제정책 확인 후)\nCROSSCHECK ARCHIVELOG ALL;\nDELETE NOPROMPT ARCHIVELOG ALL BACKED UP 1 TIMES TO DEVICE TYPE sbt COMPLETED BEFORE 'SYSDATE-1';\n\n# 잊힌 GRP 정리 (SQL*Plus)\n#   SELECT name, guarantee_flashback_database, storage_size FROM v$restore_point;\n#   DROP RESTORE POINT before_ru_1924;"],
+ ["warn","급하다고 FRA 아래 파일을 asmcmd rm이나 OS rm으로 지우면 컨트롤파일 기록과 어긋나 FRA 계산이 틀어집니다. 반드시 RMAN DELETE를 쓰고, 이미 지웠다면 CROSSCHECK 후 DELETE EXPIRED로 기록을 맞춥니다."],
+ ["tip","실습 SQL 문제 d24(FRA vs 디스크그룹)·d25(유형별)·d26(잊힌 GRP)를 순서대로 풀면 이 점검 흐름을 그대로 연습할 수 있어요."]
+]}],
+ quiz: [
+ { q: "V$DATABASE.FLASHBACK_ON이 'RESTORE POINT ONLY'인 의미는?", o: ["Flashback Database가 켜져 있다", "Flashback Database는 꺼져 있지만 보장 복원 지점이 있어 그 지점으로만 되돌릴 수 있다", "복원 지점을 만들 수 없다", "Standby 전용 모드"], a: 1, e: "보장 복원 지점을 만들면 FLASHBACK_ON이 NO에서 RESTORE POINT ONLY로 바뀌고, 그 지점까지 필요한 Flashback 로그를 계속 보관합니다." },
+ { q: "FRA의 파일 유형별 사용률을 보여주는 뷰는?", o: ["V$RECOVERY_FILE_DEST", "V$RECOVERY_AREA_USAGE", "V$FLASHBACK_DATABASE_LOG", "V$BACKUP_FILES"], a: 1, e: "V$RECOVERY_AREA_USAGE는 CONTROL FILE, REDO LOG, ARCHIVED LOG, BACKUP PIECE, FLASHBACK LOG 등 유형별 사용률·회수 가능 비율을 보여줍니다." },
+ { q: "FRA 아래 아카이브를 OS에서 직접 지웠을 때 RMAN 기록을 맞추는 방법은?", o: ["RESYNC CATALOG만", "CROSSCHECK 후 DELETE EXPIRED", "ALTER SYSTEM SWITCH LOGFILE", "DB 재기동"], a: 1, e: "CROSSCHECK로 없는 파일을 EXPIRED로 표시하고 DELETE EXPIRED로 기록을 정리합니다." },
+ { q: "Recovery Catalog 스키마 버전이 접속한 RMAN 클라이언트보다 낮을 때 실행할 명령은?", o: ["CREATE CATALOG", "UPGRADE CATALOG", "REGISTER DATABASE", "RESYNC CATALOG"], a: 1, e: "카탈로그는 붙는 RMAN 클라이언트 중 가장 높은 버전 이상이어야 하므로 UPGRADE CATALOG로 올립니다." },
+ { q: "DUPLICATE … FOR STANDBY로 만든 DB의 DBID는?", o: ["새 DBID를 받는다", "원본과 같다", "0으로 초기화된다", "PDB마다 다르다"], a: 1, e: "Standby는 Primary와 같은 DB이므로 DBID가 같습니다. 일반 DUPLICATE(테스트 복제)는 새 DBID를 받습니다." },
+ { q: "DB에 접속하지 않고 OS에서 데이터파일 블록 손상을 검사하는 유틸리티는?", o: ["dbv (DBVERIFY)", "tkprof", "orapwd", "adrci"], a: 0, e: "dbv file=<파일> blocksize=8192 로 오프라인 상태의 파일도 검사할 수 있습니다." }
+]},
+rac: { quiz: [
+ { q: "FAN 이벤트를 커넥션 풀·클라이언트로 전달하는 서비스는?", o: ["LREG", "ONS (Oracle Notification Service)", "GNS", "CTSS"], a: 1, e: "ONS가 FAN 이벤트를 전달합니다. 클라이언트 쪽 방화벽에서 ONS 원격 포트(기본 6200)가 막혀 있으면 FAN을 못 받습니다." },
+ { q: "서비스에 -failovertype TRANSACTION을 설정하는 목적은?", o: ["TAF SELECT 재개", "Application Continuity(트랜잭션 재실행)", "로드밸런싱", "서비스 자동 시작"], a: 1, e: "TRANSACTION은 AC, AUTO는 19c의 TAC(Transparent Application Continuity)를 뜻합니다." },
+ { q: "crsctl get css misscount가 보여주는 값은?", o: ["Voting Disk I/O 허용 시간", "노드 간 네트워크 heartbeat 허용 시간(초)", "OCR 백업 주기", "리소스 재시작 횟수"], a: 1, e: "misscount 동안 네트워크 heartbeat가 없으면 노드 Eviction이 일어납니다. Voting Disk 쪽은 disktimeout입니다." }
+]},
+asm: { quiz: [
+ { q: "ACFS 파일시스템을 클러스터 리소스로 등록해 자동 마운트되게 하는 명령은?", o: ["asmcmd mount", "srvctl add filesystem", "mkfs -t acfs", "crsctl add type"], a: 1, e: "srvctl add filesystem -device … -path … 로 등록하면 클러스터가 기동·마운트를 관리합니다." },
+ { q: "멀티패스 환경에서 ASM 디스크용 udev 규칙을 걸어야 하는 장치는?", o: ["개별 경로 장치 /dev/sdX", "멀티패스 장치 /dev/mapper/…", "/dev/asm/…", "/dev/loop"], a: 1, e: "개별 경로에 걸면 그 경로가 끊길 때 디스크가 사라진 것처럼 보입니다. 멀티패스 장치를 기준으로 고정합니다." }
+]},
+patch: { quiz: [
+ { q: "홈에 적용된 패치 목록을 간단히 보는 OPatch 명령은?", o: ["opatch lsinventory -detail", "opatch lspatches", "opatch version", "opatch util cleanup"], a: 1, e: "lspatches는 패치 번호와 설명만 간단히 보여줍니다. 자세한 내용은 lsinventory." },
+ { q: "DB RU와 OJVM 패치를 함께 묶어 내려받을 수 있게 제공되는 패치를 무엇이라 하나?", o: ["Interim 패치", "Combo 패치", "Bundle Merge", "Overlay 패치"], a: 1, e: "분기마다 RU와 OJVM을 묶은 Combo 패치가 제공됩니다. 적용 방식(롤링 여부)은 각 README를 따릅니다." }
+]},
+perf: { lessons: [
+{ id:"perf-11", title:"옵티마이저 통계 관리 (DBMS_STATS)", min:6, ref:[["SQL Tuning Guide 19c · Optimizer Statistics Concepts", D + "tgsql/optimizer-statistics-concepts.html"], ["PL/SQL Packages and Types Reference 19c · DBMS_STATS", D + "arpls/DBMS_STATS.html"]], body:[
+ ["p","옵티마이저는 통계(행 수, 블록 수, 컬럼 값 분포)를 보고 실행계획을 고릅니다. 통계가 실제와 크게 다르면 나쁜 계획이 나옵니다."],
+ ["ul",["자동 통계 수집 작업이 유지보수 윈도우(기본: 평일 22시부터 4시간, 주말 06시부터 20시간)에 돌면서 통계가 없거나 오래된(stale) 객체를 수집합니다.","행의 약 10% 이상이 바뀌면 stale로 봅니다(STALE_PERCENT 기본 10).","통계를 잠근(LOCK) 테이블은 자동 작업이 건너뜁니다."]],
+ ["code","sql","-- 오래됐거나 없는 통계\nEXEC DBMS_STATS.FLUSH_DATABASE_MONITORING_INFO;   -- 변경량 정보를 딕셔너리에 반영\nSELECT owner, table_name, object_type, num_rows, last_analyzed, stale_stats, stattype_locked\nFROM   dba_tab_statistics\nWHERE  owner = 'APP_OWNER' AND (stale_stats = 'YES' OR last_analyzed IS NULL);\n\n-- 수집 (기본값 사용을 권장)\nEXEC DBMS_STATS.GATHER_TABLE_STATS('APP_OWNER', 'ORDERS');\nEXEC DBMS_STATS.GATHER_SCHEMA_STATS('APP_OWNER', options => 'GATHER STALE');\n\n-- 잠금 / 해제\nEXEC DBMS_STATS.LOCK_TABLE_STATS('APP_OWNER', 'BATCH_LOG');\nEXEC DBMS_STATS.UNLOCK_TABLE_STATS('APP_OWNER', 'BATCH_LOG');\n\n-- 설정값 확인 (전역·테이블별)\nSELECT DBMS_STATS.GET_PREFS('STALE_PERCENT', 'APP_OWNER', 'ORDERS') FROM dual;\n\n-- 자동 통계 작업 상태\nSELECT client_name, status FROM dba_autotask_client WHERE client_name = 'auto optimizer stats collection';"],
+ ["ul",["통계를 새로 모으기 전에 기존 통계를 백업해 두면(DBMS_STATS.EXPORT_TABLE_STATS) 계획이 나빠졌을 때 되돌릴 수 있습니다. 오라클도 기본으로 일정 기간의 통계 이력을 보관합니다(DBMS_STATS.RESTORE_TABLE_STATS).","대량 적재 직후 바로 조회가 돈다면, 적재 배치 끝에 통계 수집을 넣는 것이 자동 작업을 기다리는 것보다 안전합니다."]],
+ ["tip","실습 SQL 문제 d35에서 'STALE_STATS = YES만 보면 통계가 아예 없는 테이블을 놓친다'는 함정을 직접 확인해 보세요."]
+]}],
+ quiz: [
+ { q: "통계가 한 번도 수집되지 않은 테이블의 DBA_TAB_STATISTICS.STALE_STATS 값은?", o: ["YES", "NO", "NULL", "UNKNOWN"], a: 2, e: "통계 자체가 없으면 STALE_STATS도 NULL입니다. 그래서 LAST_ANALYZED IS NULL 조건을 함께 봐야 합니다." },
+ { q: "DBMS_STATS의 STALE_PERCENT 기본값은?", o: ["5", "10", "20", "50"], a: 1, e: "행의 10% 이상이 변경되면 통계를 stale로 판단합니다. 테이블별로 SET_TABLE_PREFS로 바꿀 수 있습니다." },
+ { q: "통계가 잠긴 테이블(STATTYPE_LOCKED = ALL)에 대한 자동 통계 작업의 동작은?", o: ["강제로 수집한다", "건너뛴다", "에러로 작업 전체가 멈춘다", "잠금을 자동 해제한다"], a: 1, e: "잠긴 통계는 자동 작업이 건너뜁니다. 의도된 잠금인지 확인 후 UNLOCK_TABLE_STATS로 풉니다." },
+ { q: "SQL Monitor 리포트를 브라우저에서 그래프로 보는 HTML로 받으려면 REPORT_SQL_MONITOR의 type은?", o: ["'TEXT'", "'HTML'", "'ACTIVE'", "'XML'"], a: 2, e: "type => 'ACTIVE'는 인터랙티브 HTML 리포트를 만듭니다. SR 첨부용으로도 좋습니다." },
+ { q: "바인드 값에 따라 다른 실행계획을 쓰도록 오라클이 판단한 커서를 V$SQL에서 나타내는 컬럼은?", o: ["IS_SHAREABLE", "IS_BIND_AWARE", "IS_OBSOLETE", "IS_RESOLVED_ADAPTIVE_PLAN"], a: 1, e: "적응형 커서 공유에서 IS_BIND_SENSITIVE는 '값에 민감할 수 있음', IS_BIND_AWARE는 '값에 맞춰 계획을 나눠 씀'을 뜻합니다." },
+ { q: "인덱스 선두 컬럼 조건 없이 두 번째 컬럼 조건만으로 인덱스를 쓰는 액세스 경로는?", o: ["INDEX RANGE SCAN", "INDEX SKIP SCAN", "INDEX UNIQUE SCAN", "INDEX FAST FULL SCAN"], a: 1, e: "선두 컬럼의 값 종류가 적을 때 각 값별로 건너뛰며 읽는 INDEX SKIP SCAN이 선택될 수 있습니다." },
+ { q: "WHERE TO_CHAR(order_dt, 'YYYYMMDD') = '20261118' 처럼 컬럼에 함수를 씌우면 order_dt 일반 인덱스는?", o: ["그대로 사용된다", "그 조건으로는 사용할 수 없다 (함수 기반 인덱스 필요)", "자동으로 함수 기반 인덱스로 바뀐다", "INDEX SKIP SCAN으로 바뀐다"], a: 1, e: "컬럼을 가공하면 일반 인덱스를 못 씁니다. order_dt >= DATE '2026-11-18' AND order_dt < DATE '2026-11-19' 처럼 범위로 바꾸는 것이 정석입니다." }
+]},
+sec: { quiz: [
+ { q: "DB 재기동 후 TDE 키스토어가 자동으로 열리게 하려면?", o: ["WALLET_ROOT만 설정", "auto-login 키스토어 생성", "TDE_CONFIGURATION 제거", "SYS 비밀번호 변경"], a: 1, e: "ADMINISTER KEY MANAGEMENT CREATE AUTO_LOGIN KEYSTORE FROM KEYSTORE … 로 만듭니다." },
+ { q: "ORA-28000의 의미는?", o: ["비밀번호 만료", "계정 잠김", "권한 부족", "세션 한도 초과"], a: 1, e: "ORA-28000: the account is locked. 비밀번호 만료는 ORA-28001입니다." },
+ { q: "19c(19.12 이후)에서 일정 기간 옛 비밀번호와 새 비밀번호를 함께 허용하는 프로파일 파라미터는?", o: ["PASSWORD_GRACE_TIME", "PASSWORD_ROLLOVER_TIME", "PASSWORD_REUSE_TIME", "PASSWORD_LOCK_TIME"], a: 1, e: "PASSWORD_ROLLOVER_TIME 동안은 두 비밀번호 모두로 로그인할 수 있어 여러 애플리케이션 서버를 순차적으로 바꿀 수 있습니다." }
+]},
+dg: { lessons: [
+{ id:"dg-8", title:"Primary에서 보는 Redo 전송·적용 확인", min:5, ref:[["Data Guard Concepts and Administration 19c", D + "sbydb/index.html"], ["Database Reference 19c · V$ARCHIVE_DEST_STATUS", D + "refrn/V-ARCHIVE_DEST_STATUS.html"]], body:[
+ ["p","◎ Primary에서 '보내고 있나', ◎ Standby에서 '받아서 적용하고 있나'를 나눠서 봅니다."],
+ ["code","sql","-- ◎ Primary: 전송 대상 상태 (에러가 있으면 ERROR 컬럼에 ORA- 메시지)\nSELECT dest_id, status, type, database_mode, recovery_mode, gap_status, error\nFROM   v$archive_dest_status WHERE dest_id IN (1, 2);\n\n-- ◎ Primary: 스레드별 마지막으로 Standby에 적용된 시퀀스\nSELECT thread#, MAX(CASE WHEN applied = 'YES' THEN sequence# END) last_applied,\n       SUM(CASE WHEN applied = 'NO' THEN 1 ELSE 0 END) not_applied\nFROM   v$archived_log WHERE dest_id = 2 GROUP BY thread#;"],
+ ["code","sql","-- ◎ Standby: 지연 시간\nSELECT name, value, time_computed FROM v$dataguard_stats\nWHERE  name IN ('transport lag', 'apply lag', 'apply finish time');\n\n-- ◎ Standby: MRP(적용 프로세스) 상태 (12.2+)\nSELECT name, role, action, thread#, sequence# FROM v$dataguard_process WHERE role LIKE '%apply%' OR name LIKE 'MRP%';\n\n-- ◎ Standby: 빠진 아카이브(갭)\nSELECT * FROM v$archive_gap;"],
+ ["tbl",[["증상","흔한 원인"],["transport lag만 큼","네트워크 대역폭·지연, Primary 전송 대상 에러(ERROR 컬럼)"],["apply lag만 큼","MRP 중지, Standby I/O 성능, Standby에서 긴 작업(Snapshot Standby 등)"],["GAP_STATUS에 RESOLVABLE GAP 등","아카이브 일부가 안 넘어감 — FAL로 자동 해소되는지, 안 되면 수동 전송·등록"]]],
+ ["code","bash","# 브로커를 쓰면 한눈에\ndgmgrl sys@DBBIG\nDGMGRL> SHOW CONFIGURATION LAG;\nDGMGRL> SHOW DATABASE 'DBBIG_STBY';\nDGMGRL> VALIDATE DATABASE 'DBBIG_STBY';"],
+ ["tip","V$ARCHIVED_LOG로 하루 아카이브 생성량을 셀 때는 DEST_ID = 1로 거르세요. Standby로 보낸 기록(DEST_ID = 2)도 같은 뷰에 있어서 안 거르면 두 배가 됩니다(실습 d22·d23)."]
+]}],
+ quiz: [
+ { q: "V$ARCHIVED_LOG로 하루 아카이브 생성량을 셀 때 DEST_ID 조건이 필요한 이유는?", o: ["로컬 기록만 존재해서", "Standby로 보낸 기록도 같은 뷰에 있어 중복 집계되기 때문", "RAC 스레드 구분용", "삭제된 파일을 빼기 위해"], a: 1, e: "전송 대상(DEST_ID)마다 행이 따로 생기므로 로컬(보통 DEST_ID = 1)만 세야 정확합니다." },
+ { q: "Standby에서 transport lag와 apply lag를 확인하는 뷰는?", o: ["V$ARCHIVE_DEST", "V$DATAGUARD_STATS", "V$LOG_HISTORY", "V$STANDBY_LOG"], a: 1, e: "V$DATAGUARD_STATS의 transport lag, apply lag, apply finish time으로 지연을 봅니다." },
+ { q: "Active Data Guard 라이선스 없이 Standby에 Redo를 적용할 때 Standby의 상태는?", o: ["READ ONLY WITH APPLY", "MOUNT", "READ WRITE", "NOMOUNT"], a: 1, e: "읽기 전용으로 연 채 적용하는 것이 Active Data Guard 기능이므로, 라이선스가 없으면 MOUNT 상태에서 적용합니다." },
+ { q: "19c에서 Active Data Guard Standby로 들어온 가끔의 DML을 Primary로 넘겨 처리하게 하는 파라미터는?", o: ["STANDBY_FILE_MANAGEMENT", "ADG_REDIRECT_DML", "LOG_ARCHIVE_CONFIG", "FAL_SERVER"], a: 1, e: "ADG_REDIRECT_DML=TRUE면 Standby에서 실행한 DML이 Primary로 넘어가 처리됩니다(주로 읽기 위주 애플리케이션의 가끔의 쓰기용)." },
+ { q: "Snapshot Standby로 전환하기 위해 반드시 필요한 것은?", o: ["Active Data Guard 라이선스", "FRA (내부 보장 복원 지점용)", "Far Sync 인스턴스", "Observer"], a: 1, e: "전환 시 보장 복원 지점을 내부적으로 만들어 되돌아갈 지점을 확보하므로 FRA가 필요합니다." }
+]},
+exa: { quiz: [
+ { q: "Exadata Smart Flash Cache의 WriteBack 모드 설명으로 옳은 것은?", o: ["읽기만 캐시한다", "쓰기도 플래시에 먼저 받아 두고 나중에 디스크로 내린다", "Redo만 캐시한다", "플래시를 사용하지 않는다"], a: 1, e: "WriteThrough는 읽기 캐시만, WriteBack은 쓰기도 플래시에서 받아 쓰기 많은 업무에 유리합니다." },
+ { q: "여러 DB가 같은 스토리지 셀을 쓸 때 DB별로 I/O를 나눠 주는 Exadata 기능은?", o: ["Smart Scan", "IORM", "Storage Index", "HCC"], a: 1, e: "I/O Resource Management(IORM)는 iormplan으로 DB·카테고리별 I/O 비중과 한도를 정합니다." }
+]},
+trouble: { lessons: [
+{ id:"tr-10", title:"ORA-01652 TEMP 부족 대응", min:5, ref:[["Administrator's Guide 19c · Managing Tablespaces (Temporary)", D + "admin/managing-tablespaces.html"], ["Database Reference 19c · V$TEMPSEG_USAGE", D + "refrn/V-TEMPSEG_USAGE.html"]], body:[
+ ["p","'ORA-01652: unable to extend temp segment by 128 in tablespace TEMP'는 정렬·해시 작업이 TEMP를 다 써서 난 에러입니다. TEMP를 키우기 전에 '누가, 왜' 썼는지부터 봅니다."],
+ ["code","sql","-- STEP 1. TEMP 전체 여유\nSELECT tablespace_name, ROUND(tablespace_size/1024/1024/1024,1) size_gb,\n       ROUND(free_space/1024/1024/1024,1) free_gb\nFROM   dba_temp_free_space;\n\n-- STEP 2. 지금 TEMP를 쓰는 세션 (RAC 전체)\nSELECT s.inst_id, s.sid, s.serial#, s.username, s.sql_id, t.segtype,\n       ROUND(t.blocks * 8192 / 1024 / 1024) temp_mb\nFROM   gv$tempseg_usage t JOIN gv$session s ON s.inst_id = t.inst_id AND s.saddr = t.session_addr\nORDER  BY temp_mb DESC;\n\n-- STEP 3. 이미 끝난 일이라면 ASH에서 (Diagnostics Pack)\nSELECT sql_id, MAX(temp_space_allocated)/1024/1024/1024 max_temp_gb\nFROM   dba_hist_active_sess_history\nWHERE  sample_time > SYSDATE - 1 AND temp_space_allocated > 0\nGROUP  BY sql_id ORDER BY 2 DESC FETCH FIRST 10 ROWS ONLY;"],
+ ["ul",["SEGTYPE이 SORT면 ORDER BY·GROUP BY·인덱스 생성, HASH면 해시 조인·해시 그룹이 원인입니다.","원인 SQL의 실행계획에서 예상 행 수가 터무니없이 작게 잡혀 있으면(통계 문제) 메모리 대신 TEMP로 크게 넘칠 수 있습니다.","급한 조치: TEMP 파일 추가(ALTER TABLESPACE temp ADD TEMPFILE '+DATAC1' SIZE 30G AUTOEXTEND ON MAXSIZE 32767M;) — 그다음 원인 SQL 튜닝을 요청합니다."]],
+ ["tip","RAC에서는 TEMP를 모든 인스턴스가 나눠 쓰므로, 한 노드의 배치가 TEMP를 다 써도 다른 노드 세션이 ORA-01652를 맞을 수 있습니다. 실습 SQL 문제 d32로 세션별 합산을 연습해 보세요."]
+]}],
+ quiz: [
+ { q: "ORA-00020이 났는데 PROCESSES를 바로 올릴 수 없는 이유는?", o: ["SYS만 바꿀 수 있어서", "정적 파라미터라 spfile 변경 후 재기동이 필요해서", "RAC에서는 바꿀 수 없어서", "라이선스 제한"], a: 1, e: "PROCESSES는 ISSYS_MODIFIABLE = FALSE인 정적 파라미터입니다. 원인(커넥션 누수·풀 설정)부터 잡는 것이 우선입니다." },
+ { q: "장애 시각 전후의 진단 자료(로그·트레이스·OSWatcher)를 한 번에 모으는 AHF 명령은?", o: ["tfactl diagcollect", "adrci purge", "orachk -profile", "opatch lsinventory"], a: 0, e: "tfactl diagcollect -last 2h 처럼 시간 범위를 주면 관련 노드의 자료를 묶어 줍니다. SR 첨부에 그대로 씁니다." },
+ { q: "V$UNDOSTAT의 UNXPSTEALCNT가 늘어난다는 것은?", o: ["Undo 여유가 많다", "아직 보존 기간이 안 끝난(unexpired) Undo를 다른 트랜잭션이 가져다 썼다", "Undo 테이블스페이스가 오프라인이다", "Redo가 부족하다"], a: 1, e: "만료 전 Undo를 재사용했으니 긴 쿼리가 ORA-01555를 맞을 위험이 커진 상태입니다." },
+ { q: "V$TEMPSEG_USAGE의 SEGTYPE이 HASH인 TEMP 사용의 대표 원인은?", o: ["인덱스 생성", "해시 조인·해시 GROUP BY", "LOB 쓰기", "Undo 생성"], a: 1, e: "HASH는 해시 조인·해시 집계, SORT는 정렬(ORDER BY, 인덱스 생성 등)입니다." }
+]},
+mig: { quiz: [
+ { q: "non-CDB를 PDB로 플러그인할 때 NOCOPY를 쓰는 경우의 주의점은?", o: ["공간이 두 배 필요", "원본 파일을 PDB가 그대로 가져가 non-CDB로 되돌아갈 수 없으므로 사전 백업 필수", "PDB가 읽기 전용이 됨", "TEMP 파일이 삭제됨"], a: 1, e: "COPY는 파일을 복사해 원본이 남지만, NOCOPY는 원본을 그대로 쓰므로 되돌림 대비 백업이 반드시 필요합니다." },
+ { q: "타임존 파일 업그레이드를 수동으로 할 때 쓰는 오라클 제공 스크립트 쌍은?", o: ["catupgrd.sql / utlrp.sql", "utltz_upg_check.sql / utltz_upg_apply.sql", "noncdb_to_pdb.sql / catcon.pl", "utlu122s.sql / utlusts.sql"], a: 1, e: "check로 영향 범위를 확인하고 apply로 적용합니다(재기동 포함 — 다운타임 필요)." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    (ADD[id].lessons || []).forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz || []);
+  });
+})();

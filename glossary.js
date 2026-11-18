@@ -53,6 +53,9 @@ window.DBBIG_GLOSSARY = [
   { k: "ACID", f: "Atomicity, Consistency, Isolation, Durability", g: "mem", d: "트랜잭션이 지켜야 할 네 가지 성질 (원자성·일관성·격리성·지속성)" },
   { k: "2PC", f: "Two-Phase Commit", g: "mem", d: "여러 DB에 걸친 분산 트랜잭션을 준비·확정 두 단계로 커밋하는 방식" },
   { k: "UGA", f: "User Global Area", g: "mem", d: "세션별 정보 영역. 전용 서버는 PGA, 공유 서버는 Large Pool(SGA)에 위치" },
+  { k: "TM", f: "DML Enqueue (테이블 잠금)", g: "mem", d: "DML 중인 테이블에 거는 테이블 단위 잠금. 인덱스 없는 FK에서 자식 테이블 전체에 걸려 문제가 됨" },
+  { k: "TX", f: "Transaction Enqueue (행 잠금)", g: "mem", d: "트랜잭션이 행을 바꿀 때 거는 잠금. 'enq: TX - row lock contention' 대기의 그 TX" },
+  { k: "CTAS", f: "Create Table As Select", g: "mem", d: "SELECT 결과로 새 테이블을 만드는 문장 (CREATE TABLE … AS SELECT)" },
   { k: "ITL", f: "Interested Transaction List", g: "mem", d: "블록 헤더에서 그 블록을 변경 중인 트랜잭션 목록. 부족하면 ITL 대기·데드락" },
   { k: "DST", f: "Daylight Saving Time", g: "mem", d: "타임존 파일 버전(시간대·서머타임 규칙). 업그레이드 후 올려야 TIMESTAMP WITH TIME ZONE 계산이 정확" },
   { k: "DML", f: "Data Manipulation Language", g: "mem", d: "INSERT·UPDATE·DELETE·MERGE처럼 데이터를 바꾸는 SQL" },
@@ -84,6 +87,8 @@ window.DBBIG_GLOSSARY = [
 
   /* ── 백업·복구·Data Guard ── */
   { k: "GRP", f: "Guaranteed Restore Point", g: "bk", d: "보장 복원 지점. 지울 때까지 그 시점으로 Flashback Database가 가능하도록 로그를 보존" },
+  { k: "FAL", f: "Fetch Archive Log", g: "bk", d: "Standby가 빠진 아카이브(갭)를 Primary에 자동으로 요청해 받아 오는 기능 (FAL_SERVER)" },
+  { k: "SBT", f: "System Backup to Tape", g: "bk", d: "RMAN이 테이프·백업 소프트웨어(미디어 관리 라이브러리)로 백업하는 장치 유형" },
   { k: "BMR", f: "Block Media Recovery", g: "bk", d: "손상된 블록만 골라 백업·아카이브로 복구하는 RMAN 기능 (EE)" },
   { k: "RMAN", f: "Recovery Manager", g: "bk", d: "Oracle 백업·복원·복구 도구" },
   { k: "FRA", f: "Fast Recovery Area", g: "bk", d: "백업·아카이브 로그·플래시백 로그 같은 복구 파일 전용 영역" },

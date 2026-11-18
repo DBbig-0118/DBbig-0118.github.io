@@ -329,6 +329,7 @@
   }
   function compare(user, ans, ordered) {
     if (!user) return { ok: false, why: "결과가 없습니다." };
+    if (!user.values.length && ans.values.length) return { ok: false, why: "결과가 0행이에요. (정답 " + ans.values.length + "행) WHERE 조건을 확인하세요 — NOT IN 서브쿼리에 NULL이 섞여도 0행이 됩니다." };
     if (user.columns.length !== ans.columns.length) return { ok: false, why: "컬럼 개수가 달라요. (내 결과 " + user.columns.length + "개 / 정답 " + ans.columns.length + "개)" };
     if (user.values.length !== ans.values.length) return { ok: false, why: "행 개수가 달라요. (내 결과 " + user.values.length + "행 / 정답 " + ans.values.length + "행)" };
     var U = user.values.map(function (r) { return r.map(normVal).join("\u0001"); });
