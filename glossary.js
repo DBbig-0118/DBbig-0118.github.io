@@ -113,6 +113,9 @@ window.DBBIG_GLOSSARY = [
   { k: "DR", f: "Disaster Recovery", g: "bk", d: "재해 복구. 보통 원격지 Standby 시스템을 뜻함" },
 
   /* ── 성능·진단 ── */
+  { k: "SPM", f: "SQL Plan Management", g: "perf", d: "검증된 실행계획(SQL Plan Baseline)만 쓰게 해 계획 변경으로 인한 성능 저하를 막는 기능" },
+  { k: "STS", f: "SQL Tuning Set", g: "perf", d: "SQL 문장·실행 통계·계획을 묶어 둔 집합. 튜닝·Baseline 적재·이관 테스트에 사용" },
+  { k: "IPS", f: "Incident Packaging Service", g: "perf", d: "adrci에서 incident 관련 트레이스·파일을 SR 첨부용으로 묶는 기능 (ips pack)" },
   { k: "AWR", f: "Automatic Workload Repository", g: "perf", d: "성능 통계를 주기적(기본 1시간)으로 스냅샷해 저장하는 저장소" },
   { k: "ASH", f: "Active Session History", g: "perf", d: "활성 세션 상태를 1초마다 샘플링한 기록" },
   { k: "ADDM", f: "Automatic Database Diagnostic Monitor", g: "perf", d: "AWR 스냅샷을 분석해 성능 문제와 권고를 알려주는 기능" },

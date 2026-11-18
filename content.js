@@ -1828,3 +1828,61 @@ mig: { lessons: [
     c.quiz = c.quiz.concat(ADD[id].quiz || []);
   });
 })();
+
+/* ───────── v0.1.3 보강: 알림 로그 SQL 조회·AWR 실행계획 변경 + 퀴즈 ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+trouble: { lessons: [
+{ id:"tr-14", title:"알림 로그를 SQL로 검색 (V$DIAG_ALERT_EXT)", min:5, ref:[["Database Reference 19c · V$DIAG_ALERT_EXT", D + "refrn/V-DIAG_ALERT_EXT.html"], ["Utilities 19c · ADRCI: ADR Command Interpreter", D + "sutil/index.html"]], body:[
+ ["p","서버에 ssh로 들어가 tail·grep 하지 않아도, DB에 접속만 되면 알림 로그를 SQL로 볼 수 있습니다. V$DIAG_ALERT_EXT는 그 서버의 ADR에 있는 알림 로그(log.xml)를 읽어 행으로 보여줍니다."],
+ ["code","sql","-- 최근 24시간 ORA 에러 (시간 조건은 꼭 — 파일을 읽어 오는 뷰라 느릴 수 있음)\nSELECT originating_timestamp, message_text\nFROM   v$diag_alert_ext\nWHERE  originating_timestamp > SYSTIMESTAMP - 1\nAND    message_text LIKE '%ORA-%'\nORDER  BY originating_timestamp;\n\n-- 최근 7일 에러 코드별 횟수\nSELECT REGEXP_SUBSTR(message_text, 'ORA-[0-9]+') err, COUNT(*) cnt, MAX(originating_timestamp) last_seen\nFROM   v$diag_alert_ext\nWHERE  originating_timestamp > SYSTIMESTAMP - 7 AND message_text LIKE '%ORA-%'\nGROUP  BY REGEXP_SUBSTR(message_text, 'ORA-[0-9]+') ORDER BY cnt DESC;"],
+ ["code","bash","# 같은 일을 adrci로 (oracle 계정)\nadrci\nadrci> show homes\nadrci> set home diag/rdbms/dbbig/DBBIG1\nadrci> show alert -p \"message_text like '%ORA-%' and originating_timestamp > systimestamp-1\" -term\n\n# ORA-00600 같은 incident 확인과 SR용 패키징\nadrci> show problem\nadrci> show incident\nadrci> ips pack incident 48121 in /tmp"],
+ ["ul",["같은 에러가 알림 로그 본문에서는 'ORA-1652'처럼 0 없이, 에러 스택에서는 'ORA-01652'로 찍힐 수 있습니다. 모니터링 스크립트에서 코드를 셀 때 주의하세요.","ORA-00600·ORA-07445는 PROBLEM_KEY(예: 'ORA 600 [kdsgrp1]')가 붙습니다. 이 키로 MOS를 검색하면 알려진 버그를 빨리 찾을 수 있습니다.","RAC에서는 노드마다 알림 로그가 따로 있으니 각 인스턴스에 접속해서 확인합니다."]],
+ ["tip","실습 SQL 문제 d36·d37에서 이 쿼리를 직접 짜 보고, 스케줄러 잡 실패(d38)와 시간이 맞는지 맞춰 보세요. 서로 다른 뷰의 시각을 이어 붙이는 것이 장애 분석의 기본입니다."]
+]}],
+ quiz: [
+ { q: "DB에 접속해서 알림 로그 내용을 SQL로 조회하는 뷰는?", o: ["V$DIAG_ALERT_EXT", "V$DIAG_INFO", "DBA_ALERT_HISTORY", "V$ALERT_TYPES"], a: 0, e: "V$DIAG_ALERT_EXT는 ADR 알림 로그를 행으로 보여줍니다. 파일을 읽어 오므로 시간 조건을 꼭 겁니다." },
+ { q: "ORA-00600 incident를 SR 첨부용 파일로 묶는 adrci 명령은?", o: ["show alert -tail", "ips pack incident <번호> in <디렉터리>", "purge -age", "set homepath"], a: 1, e: "ips pack은 incident의 트레이스·관련 파일을 zip으로 묶어 줍니다." },
+ { q: "알림 로그에서 같은 TEMP 부족 에러가 'ORA-1652'와 'ORA-01652' 두 형태로 보이는 이유는?", o: ["서로 다른 에러", "출력 위치(본문/에러 스택)에 따라 0 채움 형식이 달라서", "버전 차이", "RAC 노드 차이"], a: 1, e: "같은 에러지만 찍히는 형식이 다를 수 있어 코드별 집계 시 주의가 필요합니다." },
+ { q: "DBA_SCHEDULER_JOB_RUN_DETAILS에서 실패한 잡의 에러 상세 메시지가 들어 있는 컬럼은?", o: ["STATUS", "ERROR#", "ADDITIONAL_INFO", "RUN_DURATION"], a: 2, e: "ERROR#는 번호만, 메시지 내용은 ADDITIONAL_INFO에 있습니다." },
+ { q: "V$SYSTEM_EVENT의 누적값은 언제부터의 값인가?", o: ["최근 1시간", "마지막 AWR 스냅샷 이후", "인스턴스 기동 이후", "DB 생성 이후"], a: 2, e: "V$ 누적 통계는 인스턴스 재기동 시 초기화됩니다. 구간별 변화는 AWR 스냅샷 차이로 봅니다." }
+]},
+perf: { lessons: [
+{ id:"perf-14", title:"AWR로 실행계획 변경 찾고 되돌리기", min:6, ref:[["PL/SQL Packages and Types Reference 19c · DBMS_XPLAN", D + "arpls/DBMS_XPLAN.html"], ["PL/SQL Packages and Types Reference 19c · DBMS_SPM", D + "arpls/DBMS_SPM.html"]], body:[
+ ["p","\"어제까지 빨랐는데 오늘 느려졌어요\"의 흔한 원인은 실행계획 변경입니다. AWR(DBA_HIST_SQLSTAT)에는 스냅샷마다 SQL별 PLAN_HASH_VALUE와 실행 통계가 남아 있어서, 언제 계획이 바뀌었는지 찾을 수 있습니다(Diagnostics Pack)."],
+ ["code","sql","-- STEP 1. 이 SQL의 계획별 성능 추이\nSELECT s.snap_id, s.end_interval_time, q.plan_hash_value, q.executions_delta execs,\n       ROUND(q.elapsed_time_delta / NULLIF(q.executions_delta, 0) / 1000, 2) avg_ms\nFROM   dba_hist_sqlstat q JOIN dba_hist_snapshot s\n       ON s.snap_id = q.snap_id AND s.instance_number = q.instance_number AND s.dbid = q.dbid\nWHERE  q.sql_id = '3ab9wz1kq0c5d'\nORDER  BY s.snap_id;\n\n-- STEP 2. 예전 계획과 지금 계획 비교 (AWR에 저장된 계획)\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_AWR('3ab9wz1kq0c5d', 2117650911));\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_AWR('3ab9wz1kq0c5d', 4180217753));"],
+ ["code","sql","-- STEP 3. 좋았던 계획을 SQL Plan Baseline으로 고정 (19c: AWR에서 바로 적재)\nSET SERVEROUTPUT ON\nDECLARE n PLS_INTEGER;\nBEGIN\n  n := DBMS_SPM.LOAD_PLANS_FROM_AWR(\n         begin_snap   => 52100,\n         end_snap     => 52120,\n         basic_filter => q'[sql_id = '3ab9wz1kq0c5d' AND plan_hash_value = 2117650911]',\n         fixed        => 'YES');\n  DBMS_OUTPUT.PUT_LINE('loaded: ' || n);\nEND;\n/\n-- STEP 4. 적용 확인 — 새로 파싱된 커서의 SQL_PLAN_BASELINE 컬럼\nSELECT sql_handle, plan_name, enabled, accepted, fixed FROM dba_sql_plan_baselines\nWHERE  signature = (SELECT exact_matching_signature FROM v$sql WHERE sql_id = '3ab9wz1kq0c5d' FETCH FIRST 1 ROWS ONLY);\nSELECT sql_id, child_number, plan_hash_value, sql_plan_baseline FROM v$sql WHERE sql_id = '3ab9wz1kq0c5d';"],
+ ["ul",["계획이 바뀐 원인(통계 재수집, 바인드 값 쏠림, 인덱스 변경, 패치 후 옵티마이저 변화)을 함께 찾아야 같은 일이 반복되지 않습니다.","Baseline은 '응급 고정'입니다. 데이터가 크게 변하면 고정한 계획이 오히려 나빠질 수 있으니 주기적으로 다시 봅니다.","실행 횟수가 많은 OLTP SQL은 실행당 몇 ms 차이도 전체 부하에서는 크게 나타납니다."]],
+ ["tip","실습 SQL 문제 d47로 '계획이 2개 이상인 SQL'을 찾는 쿼리를 연습해 두면, 고객 '갑자기 느려졌다' 문의에 몇 분 만에 근거를 제시할 수 있습니다."]
+]}],
+ quiz: [
+ { q: "AWR에 저장된 과거 실행계획을 출력하는 함수는?", o: ["DBMS_XPLAN.DISPLAY_CURSOR", "DBMS_XPLAN.DISPLAY_AWR", "DBMS_STATS.SHOW_PLAN", "DBMS_SQLTUNE.REPORT"], a: 1, e: "DISPLAY_AWR(sql_id, plan_hash_value)로 AWR에 남은 계획을 봅니다. DISPLAY_CURSOR는 지금 Shared Pool에 있는 커서용입니다." },
+ { q: "DBA_HIST_SQLSTAT.ELAPSED_TIME_DELTA의 단위는?", o: ["초", "밀리초", "마이크로초", "센티초"], a: 2, e: "마이크로초입니다. 실행당 ms는 ÷ EXECUTIONS_DELTA ÷ 1000으로 구합니다." },
+ { q: "awrrpt.sql로 01~04시 구간 리포트를 만들 때 시작 스냅샷으로 고를 것은?", o: ["01시에 시작한 스냅샷", "01시에 끝난 스냅샷", "04시에 끝난 스냅샷", "가장 오래된 스냅샷"], a: 1, e: "리포트는 '시작 스냅샷이 끝난 시점 ~ 끝 스냅샷이 끝난 시점'이므로 01시에 끝난 스냅샷을 시작으로 줍니다." },
+ { q: "좋았던 예전 계획을 고정하는 대표적인 방법은?", o: ["통계 삭제", "SQL Plan Baseline에 그 계획을 적재(FIXED)", "인덱스 삭제", "Shared Pool 비우기"], a: 1, e: "DBMS_SPM으로 예전 계획을 Baseline에 적재하면 옵티마이저가 그 계획을 사용합니다." },
+ { q: "AWR(DBA_HIST_ 뷰, awrrpt) 사용에 필요한 라이선스는?", o: ["별도 불필요", "Diagnostics Pack", "Partitioning", "Advanced Security"], a: 1, e: "AWR·ASH·ADDM은 Enterprise Edition의 Diagnostics Pack 기능입니다." }
+]},
+sec: { quiz: [
+ { q: "DBA_USERS.ACCOUNT_STATUS가 LOCKED(TIMED)인 의미는?", o: ["관리자가 수동으로 잠금", "로그인 실패 횟수 초과로 잠겼고 PASSWORD_LOCK_TIME이 지나면 자동 해제", "비밀번호 만료", "계정 삭제 예정"], a: 1, e: "FAILED_LOGIN_ATTEMPTS를 넘겨 잠긴 상태입니다. 수동 잠금은 LOCKED로 표시됩니다." },
+ { q: "통합 감사에서 로그온 실패를 기록하는 오라클 기본 제공 정책은?", o: ["ORA_SECURECONFIG", "ORA_LOGON_FAILURES", "ORA_ACCOUNT_MGMT", "ORA_DATABASE_PARAMETER"], a: 1, e: "ORA_LOGON_FAILURES가 로그온 실패를 감사합니다. 결과는 UNIFIED_AUDIT_TRAIL의 RETURN_CODE로 봅니다." },
+ { q: "UNIFIED_AUDIT_TRAIL의 RETURN_CODE 28000이 계속 쌓인다면?", o: ["비밀번호가 틀림", "이미 잠긴 계정으로 계속 접속을 시도하는 중", "비밀번호 만료", "정상 로그인"], a: 1, e: "잠금 해제 전에 그 출발지(USERHOST)의 접속 설정부터 고쳐야 다시 잠기지 않습니다." }
+]},
+asm: { quiz: [
+ { q: "Exadata에서 세 디스크그룹의 같은 셀·같은 번호(CD_05) 그리드 디스크가 동시에 OFFLINE이라면?", o: ["디스크그룹 설정 오류", "그 셀의 물리 디스크(셀 디스크) 1개 장애 가능성", "ASM 인스턴스 장애", "네트워크 정상"], a: 1, e: "그리드 디스크는 같은 셀 디스크 위에 디스크그룹별로 잘려 있으므로, 물리 디스크 하나가 빠지면 함께 OFFLINE됩니다." }
+]},
+mig: { quiz: [
+ { q: "DBA_DATAPUMP_JOBS에서 마스터 테이블을 지워 정리해도 되는 작업은?", o: ["STATE = EXECUTING", "STATE = IDLING (attach된 정지 작업)", "STATE = NOT RUNNING이고 ATTACHED_SESSIONS = 0, 재시작 계획 없음", "모든 작업"], a: 2, e: "실행 중이거나 다시 시작할 작업의 마스터 테이블을 지우면 그 작업을 이어서 할 수 없습니다." }
+]},
+rman: { quiz: [
+ { q: "V$SESSION_LONGOPS에서 RMAN 전체 진행률을 보여주는 행의 OPNAME은?", o: ["RMAN: full datafile backup", "RMAN: aggregate input", "RMAN: incremental datafile backup", "Table Scan"], a: 1, e: "채널별 행과 별도로 'RMAN: aggregate input'이 전체 진행을 나타냅니다." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    (ADD[id].lessons || []).forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz || []);
+  });
+})();

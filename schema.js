@@ -7,7 +7,7 @@
     var day0 = Math.floor(now);                   // 오늘 00:00
     function T(rel) { return Math.round((now + rel) * 86400) / 86400; }
     function ins(table, cols, rows) {
-      var q = "INSERT INTO " + table + " (" + cols.map(function (c) { return /#/.test(c) ? '"' + c + '"' : c; }).join(",") + ") VALUES (" + cols.map(function () { return "?"; }).join(",") + ")";
+      var q = "INSERT INTO " + table + " (" + cols.map(function (c) { return /#|^LIMIT$/.test(c) ? '"' + c + '"' : c; }).join(",") + ") VALUES (" + cols.map(function () { return "?"; }).join(",") + ")";
       var st = db.prepare(q);
       rows.forEach(function (r) { st.run(r.map(function (v) { return v === undefined ? null : v; })); });
       st.free();
@@ -382,6 +382,170 @@
       ["HR", "EMPLOYEES", null, null, "TABLE", 107, 5, 69, -60, "NO", null]];
     ins("DBA_TAB_STATISTICS", ["OWNER", "TABLE_NAME", "PARTITION_NAME", "PARTITION_POSITION", "OBJECT_TYPE", "NUM_ROWS", "BLOCKS", "AVG_ROW_LEN", "LAST_ANALYZED", "STALE_STATS", "STATTYPE_LOCKED"],
       TSx.map(function (t) { return [t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8] === null ? null : sec(day0 + t[8] + 22 * HR + 14 * MIN), t[9], t[10]]; }));
+
+    /* ═════════ v0.1.3 실습 뷰 추가 — 알림 로그·스케줄러·Data Pump·장기 작업·대기 이벤트·프로파일·감사·ASM 디스크·AWR ═════════ */
+    function q1(sql) { var r = db.exec(sql); return r.length ? r[0].values : []; }
+
+    /* ── 알림 로그 (V$DIAG_ALERT_EXT, 1번 인스턴스) ── */
+    db.run("CREATE TABLE V$DIAG_ALERT_EXT (RECORD_ID INTEGER, ORIGINATING_TIMESTAMP DATE, COMPONENT_ID VARCHAR2(64), HOST_ID VARCHAR2(64), MESSAGE_TYPE INTEGER, MESSAGE_LEVEL INTEGER, PROBLEM_KEY VARCHAR2(550), MESSAGE_TEXT VARCHAR2(2048), CON_ID INTEGER)");
+    var AX = [], TR = "/u01/app/oracle/diag/rdbms/dbbig/DBBIG1/trace/";
+    function ax(t, typ, lvl, txt, pk) { AX.push([0, sec(t), "rdbms", "dbadm01", typ, lvl, pk || null, txt, 0]); }
+    q1("SELECT \"SEQUENCE#\", FIRST_TIME FROM V$ARCHIVED_LOG WHERE DEST_ID = 1 AND \"THREAD#\" = 1 AND FIRST_TIME >= " + (now - 2) + " ORDER BY 1").forEach(function (r, i) {
+      var h = hod(r[1]);
+      if (h >= 1 && h < 4 && i % 4 === 1) { ax(r[1] - 40 / 86400, 5, 16, "Thread 1 cannot allocate new log, sequence " + (r[0] + 1)); ax(r[1] - 40 / 86400, 5, 16, "Checkpoint not complete"); }
+      ax(r[1] + 1 / 86400, 5, 16, "Thread 1 advanced to log sequence " + (r[0] + 1) + " (LGWR switch)");
+    });
+    q1("SELECT BEGIN_TIME, MAXQUERYLEN FROM V$UNDOSTAT WHERE SSOLDERRCNT > 0 ORDER BY 1").forEach(function (r, i) {
+      ax(r[0] + 7 * MIN, 3, 1, "ORA-01555 caused by SQL statement below (SQL ID: b7r2kq9wd1x3n, Query Duration=" + r[1] + " sec, SCN: 0x00000001bd4c2" + (2 + i) + "f1):");
+    });
+    ax(T(-7 * HR), 3, 1, "ORA-00060: Deadlock detected. See Note 60.1 at My Oracle Support for Troubleshooting ORA-60 Errors. More info in file " + TR + "DBBIG1_ora_28817.trc.");
+    ax(day0 - 3 + 5 * HR + 12 * MIN + 31 / 86400, 3, 1, "ORA-00060: Deadlock detected. See Note 60.1 at My Oracle Support for Troubleshooting ORA-60 Errors. More info in file " + TR + "DBBIG1_ora_11402.trc.");
+    var y1652 = day0 - 1 + 2 * HR + 41 * MIN + 5 / 86400;
+    ax(y1652, 3, 1, "ORA-1652: unable to extend temp segment by 128 in tablespace TEMP");
+    ax(y1652 + 2 / 86400, 3, 1, "Errors in file " + TR + "DBBIG1_j001_40112.trc:");
+    ax(y1652 + 2 / 86400, 3, 1, "ORA-12012: error on auto execute of job \"ETL_USER\".\"JOB_LOAD_ORDERS\"");
+    ax(y1652 + 2 / 86400, 3, 1, "ORA-01652: unable to extend temp segment by 128 in tablespace TEMP");
+    ax(day0 - 4 + 2 * HR + 37 * MIN + 12 / 86400, 3, 1, "ORA-1652: unable to extend temp segment by 128 in tablespace TEMP");
+    var t600 = T(-30 * HR);
+    ax(t600, 2, 1, "Errors in file " + TR + "DBBIG1_ora_19934.trc  (incident=48121):", "ORA 600 [kdsgrp1]");
+    ax(t600, 2, 1, "ORA-00600: internal error code, arguments: [kdsgrp1], [], [], [], [], [], [], [], [], [], [], []", "ORA 600 [kdsgrp1]");
+    ax(t600 + 1 / 86400, 2, 1, "Incident details in: /u01/app/oracle/diag/rdbms/dbbig/DBBIG1/incident/incdir_48121/DBBIG1_ora_19934_i48121.trc", "ORA 600 [kdsgrp1]");
+    [T(-26 * HR), T(-5 * HR - 13 * MIN)].forEach(function (t, i) {
+      ax(t, 5, 16, "Resize operation completed for file# 11, fname +DATAC1/DBBIG/DATAFILE/hist_data.266.1163187109, old size " + (838860800 + i * 131072) + "K, new size " + (838991872 + i * 131072) + "K");
+    });
+    AX.sort(function (a, b) { return a[1] - b[1]; });
+    AX.forEach(function (r, i) { r[0] = 880100 + i; });
+    ins("V$DIAG_ALERT_EXT", ["RECORD_ID", "ORIGINATING_TIMESTAMP", "COMPONENT_ID", "HOST_ID", "MESSAGE_TYPE", "MESSAGE_LEVEL", "PROBLEM_KEY", "MESSAGE_TEXT", "CON_ID"], AX);
+
+    /* ── 스케줄러 잡 실행 이력 ── */
+    db.run("CREATE TABLE DBA_SCHEDULER_JOB_RUN_DETAILS (LOG_ID INTEGER, LOG_DATE DATE, OWNER VARCHAR2(128), JOB_NAME VARCHAR2(261), STATUS VARCHAR2(30), \"ERROR#\" INTEGER, REQ_START_DATE DATE, ACTUAL_START_DATE DATE, RUN_DURATION VARCHAR2(20), INSTANCE_ID INTEGER, SESSION_ID VARCHAR2(128), ADDITIONAL_INFO VARCHAR2(4000))");
+    function dur(m) { var s = Math.round(m * 60), h = Math.floor(s / 3600), mi = Math.floor(s % 3600 / 60), ss = s % 60; return "+000 " + p2(h) + ":" + p2(mi) + ":" + p2(ss); }
+    var JR = [];
+    function jr(owner, name, start, mins, status, err, inst, sess, info) {
+      var st = sec(start), end = sec(start + mins * MIN);
+      if (end < now) JR.push([0, end, owner, name, status, err, sec(st - 2 / 86400), st, dur(mins), inst, sess, info || null]);
+    }
+    for (var dd = 8; dd >= 0; dd--) {
+      var base = day0 - dd;
+      jr("ETL_USER", "JOB_LOAD_ORDERS", base + 2 * HR + 3 / 86400, dd === 1 ? 41 : 38 + rnd(dd + 40) * 8, dd === 1 ? "FAILED" : "SUCCEEDED", dd === 1 ? 1652 : 0, 1, (1180 + dd) + "," + (30470 + dd),
+        dd === 1 ? "ORA-01652: unable to extend temp segment by 128 in tablespace TEMP" : null);
+      jr("APP_OWNER", "JOB_DAILY_SETTLE", base + 5 * HR + 1 / 86400, dd === 3 ? 12.5 : 10 + rnd(dd + 60) * 5, dd === 3 ? "FAILED" : "SUCCEEDED", dd === 3 ? 60 : 0, 1, (700 + dd) + "," + (11000 + dd),
+        dd === 3 ? "ORA-00060: deadlock detected while waiting for resource" : null);
+      [0, 6, 12, 18].forEach(function (hh) { jr("APP_OWNER", "JOB_PURGE_LOG", base + hh * HR + 2 / 86400, 1.5 + rnd(dd * 4 + hh) * 2, "SUCCEEDED", 0, 1, (650 + hh) + "," + (9000 + dd), null); });
+      jr("SYS", "ORA$AT_OS_OPT_SY_" + (11200 + 8 - dd), base - 2 * HR + 4 / 86400, dd === 2 ? 240 : 25 + rnd(dd + 80) * 35, dd === 2 ? "STOPPED" : "SUCCEEDED", 0, 1, (330 + dd) + "," + (5100 + dd),
+        dd === 2 ? "REASON=\"Stop job called because associated window was closed\"" : null);
+    }
+    JR.sort(function (a, b) { return a[1] - b[1]; });
+    JR.forEach(function (r, i) { r[0] = 1904100 + i; });
+    ins("DBA_SCHEDULER_JOB_RUN_DETAILS", ["LOG_ID", "LOG_DATE", "OWNER", "JOB_NAME", "STATUS", "ERROR#", "REQ_START_DATE", "ACTUAL_START_DATE", "RUN_DURATION", "INSTANCE_ID", "SESSION_ID", "ADDITIONAL_INFO"], JR);
+
+    /* ── Data Pump 작업 + 마스터 테이블 ── */
+    db.run("CREATE TABLE DBA_DATAPUMP_JOBS (OWNER_NAME VARCHAR2(128), JOB_NAME VARCHAR2(128), OPERATION VARCHAR2(128), JOB_MODE VARCHAR2(128), STATE VARCHAR2(30), DEGREE INTEGER, ATTACHED_SESSIONS INTEGER, DATAPUMP_SESSIONS INTEGER)");
+    ins("DBA_DATAPUMP_JOBS", ["OWNER_NAME", "JOB_NAME", "OPERATION", "JOB_MODE", "STATE", "DEGREE", "ATTACHED_SESSIONS", "DATAPUMP_SESSIONS"], [
+      ["SYSTEM", "SYS_EXPORT_SCHEMA_01", "EXPORT", "SCHEMA", "NOT RUNNING", 0, 0, 0], ["SYSTEM", "SYS_EXPORT_FULL_01", "EXPORT", "FULL", "NOT RUNNING", 0, 0, 0],
+      ["SYSTEM", "SYS_EXPORT_SCHEMA_02", "EXPORT", "SCHEMA", "IDLING", 8, 1, 1], ["ETL_USER", "SYS_IMPORT_TABLE_01", "IMPORT", "TABLE", "EXECUTING", 4, 1, 6]]);
+    ins("DBA_OBJECTS", ["OWNER", "OBJECT_NAME", "OBJECT_TYPE", "STATUS", "CREATED", "LAST_DDL_TIME"], [
+      ["SYSTEM", "SYS_EXPORT_SCHEMA_01", "TABLE", "VALID", dv(2025, 9, 14, 21, 3, 11), dv(2025, 9, 14, 21, 40, 2)], ["SYSTEM", "SYS_EXPORT_FULL_01", "TABLE", "VALID", dv(2026, 3, 2, 23, 10, 45), dv(2026, 3, 3, 1, 2, 9)],
+      ["SYSTEM", "SYS_EXPORT_SCHEMA_02", "TABLE", "VALID", T(-6 * HR), T(-5 * HR)], ["ETL_USER", "SYS_IMPORT_TABLE_01", "TABLE", "VALID", T(-95 * MIN), T(-3 * MIN)]]);
+
+    /* ── 장기 작업 진행률 (1번 인스턴스) ── */
+    db.run("CREATE TABLE V$SESSION_LONGOPS (SID INTEGER, \"SERIAL#\" INTEGER, OPNAME VARCHAR2(64), TARGET VARCHAR2(64), TARGET_DESC VARCHAR2(32), SOFAR INTEGER, TOTALWORK INTEGER, UNITS VARCHAR2(32), START_TIME DATE, LAST_UPDATE_TIME DATE, TIME_REMAINING INTEGER, ELAPSED_SECONDS INTEGER, MESSAGE VARCHAR2(512), SQL_ID VARCHAR2(13))");
+    var LO = [ // sid, serial, opname, target, desc, sofar, total, units, startRelMin, remainSec, sql_id
+      [1203, 41107, "RMAN: aggregate input", "backup", "Set Count 50211", 15728640, 25456000, "Blocks", -52, 1980, "4zu9mmr7kq1t0"],
+      [1203, 41107, "RMAN: aggregate output", "backup", "Set Count 50211", 3102400, 3102400, "Blocks", -52, 0, "4zu9mmr7kq1t0"],
+      [1210, 52219, "RMAN: full datafile backup", "Set Count 50211", "datafile", 4128768, 6656000, "Blocks", -50, 1844, "gd7g0a2t9kx1s"],
+      [1217, 50310, "RMAN: full datafile backup", "Set Count 50212", "datafile", 2621440, 6400000, "Blocks", -50, 4330, "gd7g0a2t9kx1s"],
+      [1224, 47781, "RMAN: full datafile backup", "Set Count 50209", "datafile", 5242880, 5242880, "Blocks", -50, 0, "gd7g0a2t9kx1s"],
+      [1231, 48802, "RMAN: full datafile backup", "Set Count 50213", "datafile", 5632000, 6400000, "Blocks", -50, 410, "gd7g0a2t9kx1s"],
+      [1290, 22091, "SYS_IMPORT_TABLE_01", "ETL_USER", "IMPORT", 18234, 40960, "MB", -95, 7020, "9pq2x0wmb4r7c"],
+      [902, 1201, "Table Scan", "APP_OWNER.ORDERS_HIST", "table", 2100000, 6000000, "Blocks", -18, 2010, "5h7tq0wz3k2ma"],
+      [902, 1201, "Hash Join", null, null, 120000, 120000, "Blocks", -25, 0, "5h7tq0wz3k2ma"]];
+    ins("V$SESSION_LONGOPS", ["SID", "SERIAL#", "OPNAME", "TARGET", "TARGET_DESC", "SOFAR", "TOTALWORK", "UNITS", "START_TIME", "LAST_UPDATE_TIME", "TIME_REMAINING", "ELAPSED_SECONDS", "MESSAGE", "SQL_ID"], LO.map(function (o) {
+      var st = T(o[8] * MIN), done = o[5] === o[6], el = Math.round((now - st) * 86400) - (done ? 300 : 0);
+      return [o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], st, done ? T(-5 * MIN) : T(-3 / 1440 / 20), o[9], el, o[2] + ": " + (o[3] ? o[3] + ": " : "") + o[5] + " out of " + o[6] + " " + o[7] + " done", o[10]]; }));
+
+    /* ── 대기 이벤트 누적 (1번 인스턴스, 기동 이후) ── */
+    db.run("CREATE TABLE V$SYSTEM_EVENT (EVENT VARCHAR2(64), TOTAL_WAITS INTEGER, TOTAL_TIMEOUTS INTEGER, TIME_WAITED INTEGER, AVERAGE_WAIT NUMBER, TIME_WAITED_MICRO INTEGER, WAIT_CLASS VARCHAR2(64))");
+    var SE = [ // event, waits, avg_ms, class
+      ["SQL*Net message from client", 9.8e9, 4.1, "Idle"], ["rdbms ipc message", 2.2e9, 290, "Idle"], ["Space Manager: slave idle wait", 1.6e7, 5000, "Idle"], ["pmon timer", 1.7e6, 3000, "Idle"],
+      ["cell single block physical read", 1.9e9, 0.28, "User I/O"], ["log file sync", 3.1e8, 0.9, "Commit"], ["cell multiblock physical read", 2.2e8, 1.0, "User I/O"],
+      ["log file parallel write", 2.9e8, 0.6, "System I/O"], ["enq: TX - row lock contention", 2.1e5, 820, "Application"], ["gc cr block 2-way", 1.1e9, 0.12, "Cluster"],
+      ["resmgr:cpu quantum", 4.1e6, 24, "Scheduler"], ["db file parallel write", 1.2e8, 0.8, "System I/O"], ["gc current block 2-way", 6.0e8, 0.15, "Cluster"],
+      ["cell smart table scan", 4.2e7, 2.1, "User I/O"], ["direct path read", 3.3e7, 1.1, "User I/O"], ["direct path write temp", 9.8e6, 2.3, "User I/O"],
+      ["cursor: pin S wait on X", 1.1e5, 12, "Concurrency"], ["library cache: mutex X", 2.5e6, 0.5, "Concurrency"], ["log file switch (checkpoint incomplete)", 1240, 820, "Configuration"],
+      ["control file sequential read", 5.4e7, 0.21, "System I/O"]];
+    ins("V$SYSTEM_EVENT", ["EVENT", "TOTAL_WAITS", "TOTAL_TIMEOUTS", "TIME_WAITED", "AVERAGE_WAIT", "TIME_WAITED_MICRO", "WAIT_CLASS"], SE.map(function (e, i) {
+      var w = Math.round(e[1] * (1 + rnd(i + 900) * 0.05)), micro = Math.round(w * e[2] * 1000 * (1 + rnd(i + 950) * 0.04)), cs = Math.round(micro / 10000);
+      return [e[0], w, e[3] === "Idle" ? Math.round(w * 0.3) : 0, cs, Math.round(cs / w * 100) / 100, micro, e[3]]; }));
+
+    /* ── 프로파일 ── */
+    db.run("CREATE TABLE DBA_PROFILES (PROFILE VARCHAR2(128), RESOURCE_NAME VARCHAR2(32), RESOURCE_TYPE VARCHAR2(8), \"LIMIT\" VARCHAR2(128), COMMON VARCHAR2(3))");
+    var RES = [["COMPOSITE_LIMIT", "KERNEL"], ["SESSIONS_PER_USER", "KERNEL"], ["CPU_PER_SESSION", "KERNEL"], ["CPU_PER_CALL", "KERNEL"], ["LOGICAL_READS_PER_SESSION", "KERNEL"], ["LOGICAL_READS_PER_CALL", "KERNEL"],
+      ["IDLE_TIME", "KERNEL"], ["CONNECT_TIME", "KERNEL"], ["PRIVATE_SGA", "KERNEL"], ["FAILED_LOGIN_ATTEMPTS", "PASSWORD"], ["PASSWORD_LIFE_TIME", "PASSWORD"], ["PASSWORD_REUSE_TIME", "PASSWORD"],
+      ["PASSWORD_REUSE_MAX", "PASSWORD"], ["PASSWORD_VERIFY_FUNCTION", "PASSWORD"], ["PASSWORD_LOCK_TIME", "PASSWORD"], ["PASSWORD_GRACE_TIME", "PASSWORD"], ["INACTIVE_ACCOUNT_TIME", "PASSWORD"], ["PASSWORD_ROLLOVER_TIME", "PASSWORD"]];
+    var PDEF = { FAILED_LOGIN_ATTEMPTS: "10", PASSWORD_LIFE_TIME: "180", PASSWORD_VERIFY_FUNCTION: "NULL", PASSWORD_LOCK_TIME: "1", PASSWORD_GRACE_TIME: "7", PASSWORD_ROLLOVER_TIME: "0" };
+    var PROF = { DEFAULT: PDEF, APP_PROFILE: { FAILED_LOGIN_ATTEMPTS: "5", PASSWORD_VERIFY_FUNCTION: "ORA12C_VERIFY_FUNCTION" }, MON_PROFILE: { SESSIONS_PER_USER: "5", IDLE_TIME: "30", PASSWORD_LIFE_TIME: "UNLIMITED" } };
+    var PR = [];
+    Object.keys(PROF).forEach(function (p) { RES.forEach(function (r) { PR.push([p, r[0], r[1], PROF[p][r[0]] || (p === "DEFAULT" ? "UNLIMITED" : "DEFAULT"), "NO"]); }); });
+    ins("DBA_PROFILES", ["PROFILE", "RESOURCE_NAME", "RESOURCE_TYPE", "LIMIT", "COMMON"], PR);
+
+    /* ── 통합 감사 (로그온 실패·보안 설정 변경) ── */
+    db.run("CREATE TABLE UNIFIED_AUDIT_TRAIL (EVENT_TIMESTAMP DATE, DBUSERNAME VARCHAR2(128), OS_USERNAME VARCHAR2(128), USERHOST VARCHAR2(128), CLIENT_PROGRAM_NAME VARCHAR2(48), ACTION_NAME VARCHAR2(64), RETURN_CODE INTEGER, OBJECT_SCHEMA VARCHAR2(128), OBJECT_NAME VARCHAR2(128), UNIFIED_AUDIT_POLICIES VARCHAR2(4000), INSTANCE_ID INTEGER)");
+    var lockT = q1("SELECT LOCK_DATE FROM DBA_USERS WHERE USERNAME = 'BATCH_USER'")[0][0], UA = [], k2;
+    function ua(t, u, os, host, prog, act, rc, oname, pol, inst) { UA.push([sec(t), u, os, host, prog, act, rc, oname ? "SYS" : null, oname, pol, inst]); }
+    for (k2 = 4; k2 >= 0; k2--) ua(lockT - k2 * MIN - 7 / 86400, "BATCH_USER", "batch", "batch02", "sqlplus@batch02 (TNS V1-V3)", "LOGON", 1017, null, "ORA_LOGON_FAILURES", 1);
+    for (k2 = 1; lockT + k2 * 10 * MIN < now; k2++) ua(lockT + k2 * 10 * MIN, "BATCH_USER", "batch", "batch02", "sqlplus@batch02 (TNS V1-V3)", "LOGON", 28000, null, "ORA_LOGON_FAILURES", 1);
+    [-22, -16.5, -9, -4.2, -2.1, -0.6].forEach(function (h, i) { ua(T(h * HR), "REPORT_USER", "rptsvc", "rpt01", "JDBC Thin Client", "LOGON", 28001, null, "ORA_LOGON_FAILURES", i % 2 + 1); });
+    [0, 1, 2].forEach(function (i) { ua(T(-12 * HR + i * 4 / 86400), "SCOTT", "unknown", "10.20.30.44", "python3", "LOGON", 1017, null, "ORA_LOGON_FAILURES", 2); });
+    [0, 1].forEach(function (i) { ua(T(-20 * HR + i * 30 / 86400), "APP_USER", "wasadm", "wasap03", "JDBC Thin Client", "LOGON", 1017, null, "ORA_LOGON_FAILURES", 1); });
+    ua(T(-2 * DAY - 3 * HR), "SYSTEM", "oracle", "dbadm01", "sqlplus@dbadm01 (TNS V1-V3)", "ALTER USER", 0, "ETL_USER", "ORA_SECURECONFIG", 1);
+    ua(T(-30 * HR), "SYSTEM", "oracle", "dbadm01", "sqlplus@dbadm01 (TNS V1-V3)", "GRANT", 0, null, "ORA_SECURECONFIG", 1);
+    ua(T(-3 * DAY), "BATCH_USER", "batch", "batch02", "sqlplus@batch02 (TNS V1-V3)", "LOGON", 1017, null, "ORA_LOGON_FAILURES", 1);
+    UA.forEach(function (r) { if (r[5] !== "ALTER USER") r[7] = null; });
+    UA.sort(function (a, b) { return a[0] - b[0]; });
+    ins("UNIFIED_AUDIT_TRAIL", ["EVENT_TIMESTAMP", "DBUSERNAME", "OS_USERNAME", "USERHOST", "CLIENT_PROGRAM_NAME", "ACTION_NAME", "RETURN_CODE", "OBJECT_SCHEMA", "OBJECT_NAME", "UNIFIED_AUDIT_POLICIES", "INSTANCE_ID"], UA);
+
+    /* ── ASM 디스크 (Exadata 셀 3대 × 12 그리드 디스크) ── */
+    db.run("CREATE TABLE V$ASM_DISK (GROUP_NUMBER INTEGER, DISK_NUMBER INTEGER, NAME VARCHAR2(30), PATH VARCHAR2(256), FAILGROUP VARCHAR2(30), MOUNT_STATUS VARCHAR2(7), HEADER_STATUS VARCHAR2(12), MODE_STATUS VARCHAR2(7), STATE VARCHAR2(8), TOTAL_MB INTEGER, FREE_MB INTEGER, REPAIR_TIMER INTEGER)");
+    var ADK = [];
+    q1("SELECT GROUP_NUMBER, NAME, TOTAL_MB, FREE_MB FROM V$ASM_DISKGROUP ORDER BY 1").forEach(function (g) {
+      var n = 36, tb = Math.floor(g[2] / n), fb = Math.floor(g[3] / n), dn = 0;
+      for (var c = 1; c <= 3; c++) for (var d = 0; d < 12; d++) {
+        var cell = "celadm0" + c, nm = g[1] + "_CD_" + p2(d) + "_" + cell.toUpperCase(), off = c === 3 && d === 5, last = dn === n - 1;
+        var tot = tb + (last ? g[2] - tb * n : 0), fr = fb + (last ? g[3] - fb * n : 0);
+        ADK.push([g[0], dn++, nm, "o/192.168.136." + (3 + c * 2) + ";192.168.136." + (4 + c * 2) + "/" + g[1] + "_CD_" + p2(d) + "_" + cell, cell.toUpperCase(),
+          off ? "MISSING" : "CACHED", off ? "UNKNOWN" : "MEMBER", off ? "OFFLINE" : "ONLINE", "NORMAL", tot, fr, off ? 9360 : 0]);
+      }
+    });
+    ins("V$ASM_DISK", ["GROUP_NUMBER", "DISK_NUMBER", "NAME", "PATH", "FAILGROUP", "MOUNT_STATUS", "HEADER_STATUS", "MODE_STATUS", "STATE", "TOTAL_MB", "FREE_MB", "REPAIR_TIMER"], ADK);
+    db.run("UPDATE V$ASM_DISKGROUP SET OFFLINE_DISKS = 1");
+
+    /* ── AWR (8일, 1시간 스냅샷, 2개 인스턴스) — Diagnostics Pack 필요 ── */
+    db.run("CREATE TABLE DBA_HIST_SNAPSHOT (SNAP_ID INTEGER, DBID INTEGER, INSTANCE_NUMBER INTEGER, STARTUP_TIME DATE, BEGIN_INTERVAL_TIME DATE, END_INTERVAL_TIME DATE)");
+    db.run("CREATE TABLE DBA_HIST_SQLSTAT (SNAP_ID INTEGER, DBID INTEGER, INSTANCE_NUMBER INTEGER, SQL_ID VARCHAR2(13), PLAN_HASH_VALUE INTEGER, EXECUTIONS_DELTA INTEGER, ELAPSED_TIME_DELTA INTEGER, CPU_TIME_DELTA INTEGER, BUFFER_GETS_DELTA INTEGER, DISK_READS_DELTA INTEGER, ROWS_PROCESSED_DELTA INTEGER)");
+    var DBID = q1("SELECT DBID FROM V$DATABASE")[0][0], startT = q1("SELECT STARTUP_TIME FROM V$INSTANCE")[0][0];
+    var lastEnd = Math.floor(now * 24) / 24, SN = [], SQ = [], NS = 8 * 24, chg3ab = day0 - 3 + 14 * HR, chg6mm = day0 - 5 + 12 * HR;
+    function sqs(sid, inst, sql, plan, ex, avgMs, gets, reads, rowsPer) {
+      if (ex <= 0) return; var el = Math.round(ex * avgMs * 1000);
+      SQ.push([sid, DBID, inst, sql, plan, ex, el, Math.round(el * 0.78), Math.round(ex * gets), Math.round(ex * reads), Math.round(ex * rowsPer)]); }
+    for (var s2 = NS - 1; s2 >= 0; s2--) {
+      var endH = lastEnd - s2 * HR, snap = 52000 + (NS - 1 - s2), hh = Math.round(hod(endH)) % 24, work = hh >= 9 && hh <= 20;
+      for (var inst = 1; inst <= 2; inst++) {
+        var e2 = sec(endH + (2 + inst + rnd(s2 + inst) * 3) / 86400), b2 = sec(endH - HR + (2 + inst + rnd(s2 + inst + 1) * 3) / 86400);
+        SN.push([snap, DBID, inst, startT, b2, e2]);
+        var r0 = rnd(s2 * 7 + inst);
+        sqs(snap, inst, "3ab9wz1kq0c5d", e2 < chg3ab ? 2117650911 : 4180217753, Math.round((work ? 9000 : 1200) + r0 * (work ? 6000 : 1800)), (e2 < chg3ab ? 1.8 : 21) * (0.9 + r0 * 0.2), e2 < chg3ab ? 6 : 1450, e2 < chg3ab ? 0.4 : 3, 1);
+        sqs(snap, inst, "9cz0d4k2tf1nb", 1388734953, Math.round((work ? 20000 : 3000) + r0 * (work ? 20000 : 3000)), 0.6 * (0.9 + r0 * 0.2), 4, 0.1, 1);
+        if (inst === 1 && work) sqs(snap, 1, "5h7tq0wz3k2ma", 3045678120, 1 + Math.floor(r0 * 3), 640000 * (0.9 + r0 * 0.2), 9.2e6, 8.1e6, 1200);
+        if (inst === 2 && (hh === 2 || hh === 3)) sqs(snap, 2, "6mm1n0b8v7c2x", e2 < chg6mm ? 1022893411 : 2856319044, 1, (e2 < chg6mm ? 2400000 : 1500000) * (0.9 + r0 * 0.2), 4.1e7, 3.6e7, 2.4e6);
+        if (inst === 1 && hh >= 2 && hh <= 4) sqs(snap, 1, "7yq2mm4h0p8xs", 991827364, 3 + Math.floor(r0 * 4), 300000 * (0.9 + r0 * 0.2), 1.2e6, 9.0e5, 15000);
+      }
+    }
+    var errSnap = q1("SELECT MIN(BEGIN_TIME) FROM V$UNDOSTAT WHERE SSOLDERRCNT > 0")[0][0];
+    var sB = SN.filter(function (r) { return r[2] === 1 && r[5] >= errSnap + 30 * MIN; }).sort(function (a, b) { return a[5] - b[5]; })[0];
+    if (sB) SQ.push([sB[0], DBID, 1, "b7r2kq9wd1x3n", 3721194550, 1, 13920 * 1e6, Math.round(13920 * 1e6 * 0.3), 9.8e7, 8.7e7, 340]);
+    ins("DBA_HIST_SNAPSHOT", ["SNAP_ID", "DBID", "INSTANCE_NUMBER", "STARTUP_TIME", "BEGIN_INTERVAL_TIME", "END_INTERVAL_TIME"], SN);
+    ins("DBA_HIST_SQLSTAT", ["SNAP_ID", "DBID", "INSTANCE_NUMBER", "SQL_ID", "PLAN_HASH_VALUE", "EXECUTIONS_DELTA", "ELAPSED_TIME_DELTA", "CPU_TIME_DELTA", "BUFFER_GETS_DELTA", "DISK_READS_DELTA", "ROWS_PROCESSED_DELTA"], SQ);
   }
   root.DBBIG_SCHEMA = build;
 })(typeof window !== "undefined" ? window : globalThis);

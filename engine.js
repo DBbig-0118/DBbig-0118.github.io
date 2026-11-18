@@ -293,6 +293,8 @@
     code = code.replace(/\b(DATE|TIMESTAMP)\s*(§\d+§)/gi, "TO_DATE($2)");
     // # 포함 식별자 (SERIAL#, GROUP#, THREAD# ...)
     code = code.replace(/(^|[^A-Za-z0-9_$#§])([A-Za-z_][A-Za-z0-9_$]*#[A-Za-z0-9_$#]*)/g, function (m, a, id) { return a + '"' + id.toUpperCase() + '"'; });
+    // Oracle에는 LIMIT 키워드가 없음 → 컬럼명(DBA_PROFILES.LIMIT 등)으로 취급
+    code = code.replace(/\bLIMIT\b/gi, '"LIMIT"');
     code = code.replace(/\b(SYSDATE|SYSTIMESTAMP|CURRENT_DATE|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\b(?!\s*\()/gi, "SYSDATE()");
     code = code.replace(/\bMINUS\b/gi, "EXCEPT");
     code = code.replace(/\bOFFSET\s+(\S+)\s+ROWS?\s+FETCH\s+(?:FIRST|NEXT)\s+(\S+)\s+ROWS?\s+ONLY\b/gi, "LIMIT $2 OFFSET $1");
