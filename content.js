@@ -1886,3 +1886,231 @@ rman: { quiz: [
     c.quiz = c.quiz.concat(ADD[id].quiz || []);
   });
 })();
+
+/* ───────── v0.1.4: 19c 공식 매뉴얼을 읽고 정리한 레슨 18개 + 퀴즈 ─────────
+   각 레슨의 ref는 실제로 읽은 docs.oracle.com 19c 페이지 */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+/* ───── 1호선 아키텍처 ───── */
+arch: { lessons: [
+{ id:"arch-24", title:"데이터 블록 속과 행 체이닝·마이그레이션", min:5, ref:[["Database Concepts 19c · Logical Storage Structures", D + "cncpt/logical-storage-structures.html"]], body:[
+ ["p","데이터 블록에는 사용자 데이터 말고도 관리 정보(블록 헤더, 테이블 디렉터리, 행 디렉터리, 트랜잭션 항목)가 들어 있고, 매뉴얼은 이 오버헤드를 평균 84~107바이트로 설명합니다. 블록을 바꾸는 트랜잭션마다 트랜잭션 항목(약 23바이트)이 하나씩 필요합니다 — 흔히 ITL이라고 부르는 그 부분입니다."],
+ ["tbl",[["구분","언제 생기나","특징"],["체이닝 (Chaining)","행이 처음부터 블록 하나에 안 들어갈 때 (LONG 컬럼, 아주 많은 컬럼)","피할 수 없는 경우가 많음. 한 행 조각(row piece)에는 컬럼 255개까지라 1000컬럼 테이블은 조각 4개"],["마이그레이션 (Migration)","블록에 들어 있던 행이 UPDATE로 길어졌는데 그 블록에 여유가 없을 때","행 전체를 새 블록으로 옮기고, 원래 자리에는 새 위치를 가리키는 주소만 남김. ROWID는 바뀌지 않음"]]],
+ ["p","둘 다 그 행을 읽을 때 I/O가 추가로 듭니다. 마이그레이션은 **PCTFREE**(블록에 남겨 둘 최소 여유 %, 기본 10)로 줄일 수 있습니다. ASSM(기본) 테이블스페이스에서는 PCTFREE만 의미가 있고 PCTUSED는 무시됩니다."],
+ ["code","sql","-- 체이닝·마이그레이션된 행을 읽은 횟수 (계속 늘면 의심)\nSELECT name, value FROM v$sysstat WHERE name = 'table fetch continued row';\n\n-- 특정 테이블의 체인 행 찾기 (CHAINED_ROWS 테이블은 ?/rdbms/admin/utlchain.sql로 생성)\n@?/rdbms/admin/utlchain.sql\nANALYZE TABLE app.orders LIST CHAINED ROWS INTO chained_rows;\nSELECT COUNT(*) FROM chained_rows WHERE table_name = 'ORDERS';\n\n-- 자주 길어지는 테이블은 PCTFREE를 올리고 재구성 (새 블록부터 적용)\nALTER TABLE app.orders PCTFREE 20;\nALTER TABLE app.orders MOVE ONLINE UPDATE INDEXES;"],
+ ["tip","ROWID는 디스크에 저장된 값이 아니라 '데이터 오브젝트 번호 + 파일 번호 + 블록 번호 + 행 번호'로 계산한 주소입니다(OOOOOOFFFBBBBBBRRR). 마이그레이션돼도 ROWID가 그대로라서 인덱스는 옛 블록을 먼저 읽고 한 번 더 따라가야 합니다."]
+]},
+{ id:"arch-25", title:"파라미터 파일 탐색 순서와 SHUTDOWN 모드", min:5, ref:[["Administrator's Guide 19c · Starting Up and Shutting Down", D + "admin/starting-up-and-shutting-down.html"]], body:[
+ ["p","STARTUP 할 때 인스턴스는 SPFILE을 먼저 찾고, 없으면 텍스트 PFILE을 씁니다. 19c 매뉴얼의 탐색 순서:"],
+ ["ul",["① srvctl add/modify database의 -spfile로 지정한 위치 (srvctl config database로 확인)","② spfile$ORACLE_SID.ora","③ spfile.ora — RAC에서 모든 인스턴스가 SPFILE 하나를 같이 쓰기 때문에 목록에 있음","④ init$ORACLE_SID.ora (유일한 텍스트 파일)"]],
+ ["code","sql","-- 지금 어떤 SPFILE로 떴나 (값이 비어 있으면 PFILE로 기동한 것)\nSHOW PARAMETER spfile\n\n-- SPFILE이 있어도 PFILE로 기동\nSTARTUP PFILE='/u01/app/oracle/product/19.0.0/dbhome_1/dbs/initDBBIG1.ora'\n-- 다른 위치의 SPFILE을 쓰려면: 한 줄짜리 PFILE에 SPFILE='+DATAC1/DBBIG/PARAMETERFILE/spfile.123.456' 만 적고 그 PFILE로 기동\n-- (PFILE 안에서 IFILE로 SPFILE을 가리키는 것은 안 됨)"],
+ ["tbl",[["SHUTDOWN 모드","기다리는 것","다음 기동 시 인스턴스 복구"],["NORMAL (기본)","모든 사용자가 접속을 끊을 때까지","불필요"],["TRANSACTIONAL","진행 중 트랜잭션이 끝날 때까지 (새 트랜잭션 불가)","불필요"],["IMMEDIATE","기다리지 않음 — 커밋 안 된 트랜잭션은 롤백","불필요"],["ABORT","기다리지 않음 — 롤백도 안 함","필요 (자동으로 수행)"]]],
+ ["ul",["기다리는 모드는 1시간 제한이 있어, 넘기면 ORA-01013으로 실패합니다. 다시 SHUTDOWN을 내고 그래도 안 되면 ABORT를 씁니다.","종료 중에 접속하려는 사용자는 ORA-01090을 받습니다.","srvctl stop의 기본 stop 옵션은 immediate입니다.","STARTUP RESTRICT는 RESTRICTED SESSION 권한이 있는 사용자만 접속하게 합니다(점검 작업용). 해제: ALTER SYSTEM DISABLE RESTRICTED SESSION;"]],
+ ["tip","작업계획서의 DB 종료 STEP은 'SHUTDOWN IMMEDIATE'가 표준입니다. ABORT는 IMMEDIATE가 오래 걸려 작업 창을 넘길 때의 비상 수단이고, 다음 기동이 인스턴스 복구를 거친다는 점을 계획서에 같이 적어 두세요."]
+]},
+{ id:"arch-26", title:"메모리 관리 방식과 HugePages", min:5, ref:[["Administrator's Reference for Linux and UNIX 19c · Administering Oracle Database on Linux", D + "unxar/administering-oracle-database-on-linux.html"], ["Database Reference 19c · MEMORY_TARGET", D + "refrn/MEMORY_TARGET.html"], ["Database Reference 19c · USE_LARGE_PAGES", D + "refrn/USE_LARGE_PAGES.html"]], body:[
+ ["tbl",[["방식","설정","특징"],["AMM","MEMORY_TARGET","SGA와 PGA를 합쳐 자동 조정. Linux에서는 /dev/shm 사용"],["ASMM","SGA_TARGET + PGA_AGGREGATE_TARGET","SGA 안에서만 자동 조정. HugePages와 함께 쓸 수 있음"],["수동","각 Pool 크기 지정","특수한 경우"]]],
+ ["p","19c Linux 매뉴얼에는 MEMORY_TARGET·MEMORY_MAX_TARGET은 huge pages와 함께 쓸 수 없고 LOCK_SGA와도 함께 쓸 수 없다고 적혀 있습니다. MEMORY_TARGET 파라미터 설명에도 Linux에서는 기동 시 이 값을 명시적으로 설정하지 말라는 권고가 있습니다. 그래서 운영계(특히 Exadata·대용량 SGA)는 **ASMM + HugePages**가 표준입니다."],
+ ["code","bash","# root — HugePages 현황 (HugePages_Total / Free / Rsvd)\ngrep Huge /proc/meminfo\n\n# 설정 (값은 SGA 합계 기준으로 계산, 2MB 페이지 기준)\n#   /etc/sysctl.conf :  vm.nr_hugepages = 40960\nsysctl -p\n\n# Transparent HugePages는 끄는 것이 오라클 권고\ncat /sys/kernel/mm/transparent_hugepage/enabled"],
+ ["code","sql","SHOW PARAMETER memory_target       -- 0 이어야 ASMM\nSHOW PARAMETER sga_target\nSHOW PARAMETER use_large_pages     -- ONLY로 두면 HugePages가 부족할 때 기동 실패 → 잘못된 설정을 바로 알 수 있음"],
+ ["warn","AMM을 쓰는데 /dev/shm이 MEMORY_TARGET보다 작으면 기동 시 ORA-00845가 납니다. 이때 /dev/shm을 키우기보다 AMM을 끄고 ASMM + HugePages로 바꾸는 것이 장기적으로 맞습니다."],
+ ["tip","인스턴스 기동 직후 알림 로그에 'Supported system pagesize(s)'와 large pages 사용량 표가 찍힙니다. HugePages 설정 변경 후에는 그 부분을 캡처해 작업 결과로 남기세요."]
+]},
+{ id:"arch-27", title:"관리 권한: SYSDBA부터 SYSRAC까지", min:4, ref:[["Administrator's Guide 19c · Getting Started with Database Administration", D + "admin/getting-started-with-database-administration.html"], ["Security Guide 19c · Users with Administrative Privileges", D + "dbseg/index.html"]], body:[
+ ["p","12c부터 모든 일을 SYSDBA로 하지 않도록 업무별 관리 권한이 나뉘었습니다(권한 분리). 각 권한에는 같은 이름의 계정(SYSBACKUP 등)이 있고, 기본적으로 잠겨 있습니다."],
+ ["tbl",[["관리 권한","용도"],["SYSDBA","모든 관리 작업 (접속 시 스키마는 SYS)"],["SYSOPER","기동·종료·백업 등 운영 작업 — 사용자 데이터는 보지 못함"],["SYSBACKUP","RMAN 백업·복구 (기동·종료, 복원 지점, V$ 조회 등)"],["SYSDG","Data Guard 관리 (DGMGRL)"],["SYSKM","TDE 키스토어 관리"],["SYSRAC","RAC·Clusterware 에이전트의 DB 작업"],["SYSASM","ASM 인스턴스 관리"]]],
+ ["code","sql","-- 접속 예 (OS 인증)\n-- sqlplus / as sysbackup\n-- rman target '\"/ as sysbackup\"'\n\n-- 비밀번호 파일에 누가 어떤 관리 권한으로 등록돼 있나\nSELECT username, sysdba, sysoper, sysbackup, sysdg, syskm, sysasm FROM v$pwfile_users;\n\n-- 백업 담당 계정에 SYSBACKUP만 부여\nGRANT SYSBACKUP TO bkadmin;"],
+ ["ul",["SYS로 접속할 때는 반드시 AS SYSDBA(또는 다른 관리 권한 절)를 붙여야 하고, 빼면 ORA-28012가 납니다.","관리 권한 부여는 비밀번호 파일에 기록됩니다. RAC·Data Guard 환경에서는 비밀번호 파일이 모든 노드·Standby와 맞는지 확인하세요."]],
+ ["tip","보안 진단에서 '백업 스크립트가 SYSDBA로 동작'이 지적되면 SYSBACKUP 전용 계정으로 바꾸는 것이 매뉴얼에 있는 권장 방향입니다."]
+]},
+{ id:"arch-28", title:"잠금 모드: TX와 TM (RS·RX·S·SRX·X)", min:5, ref:[["SQL Language Reference 19c · Automatic Locks in DML Operations", D + "sqlrf/Automatic-Locks-in-DML-Operations.html"], ["Database Concepts 19c · Data Concurrency and Consistency", D + "cncpt/data-concurrency-and-consistency.html"], ["SQL Language Reference 19c · LOCK TABLE", D + "sqlrf/LOCK-TABLE.html"]], body:[
+ ["p","DML은 잠금을 두 단계로 겁니다. 바꾸는 **행**에는 TX 잠금을, 그 **테이블**에는 TM 잠금을 겁니다. TM은 '이 테이블을 지금 누가 고치고 있으니 구조(DDL)는 바꾸지 말라'는 표시입니다."],
+ ["tbl",[["TM 모드","V$LOCK LMODE","대표 상황"],["RS (Row Share, SS)","2","LOCK TABLE … IN ROW SHARE MODE"],["RX (Row Exclusive, SX)","3","INSERT·UPDATE·DELETE·MERGE"],["S (Share)","4","LOCK TABLE … IN SHARE MODE, 인덱스 없는 FK의 자식 테이블"],["SRX (Share Row Exclusive, SSX)","5","LOCK TABLE … IN SHARE ROW EXCLUSIVE MODE, 인덱스 없는 FK의 일부 상황"],["X (Exclusive)","6","LOCK TABLE … IN EXCLUSIVE MODE, 일부 DDL"]]],
+ ["code","sql","-- 지금 걸린 TX·TM 잠금과 대기 (RAC 전체)\nSELECT l.inst_id, l.sid, s.username, l.type, l.id1, l.lmode, l.request, l.block,\n       CASE WHEN l.type = 'TM' THEN (SELECT object_name FROM dba_objects WHERE object_id = l.id1) END AS tm_object\nFROM   gv$lock l JOIN gv$session s ON s.inst_id = l.inst_id AND s.sid = l.sid\nWHERE  l.type IN ('TX','TM') AND (l.request > 0 OR l.block > 0)\nORDER  BY l.id1, l.request;\n-- BLOCK = 1(또는 2) : 다른 세션을 막는 중 / REQUEST > 0 : 이 모드를 얻으려고 기다리는 중"],
+ ["ul",["RX끼리는 함께 걸 수 있어서, 같은 테이블의 서로 다른 행을 여러 세션이 동시에 바꿀 수 있습니다.","S·SRX·X 모드는 RX와 공존하지 못합니다. 그래서 인덱스 없는 FK 때문에 자식 테이블에 S/SRX가 필요해지면 다른 세션의 DML과 충돌합니다.","읽기(SELECT)는 잠금을 걸지 않습니다 — 읽기 일관성은 Undo로 처리합니다."]],
+ ["tip","'enq: TM - contention' 대기가 보이면 V$LOCK의 REQUEST 모드를 보세요. 4나 5를 기다리고 있다면 인덱스 없는 외래 키(실습 SQL d33)가 거의 확실한 원인입니다."]
+]}],
+ quiz: [
+ { q: "UPDATE로 길어진 행이 블록에 안 들어가 행 전체가 새 블록으로 옮겨지는 현상은?", o: ["체이닝", "마이그레이션", "스플릿", "코얼레스"], a: 1, e: "마이그레이션입니다. 원래 자리에는 새 위치 주소만 남고 ROWID는 그대로입니다." },
+ { q: "마이그레이션된 행의 ROWID는?", o: ["새 블록 주소로 바뀐다", "바뀌지 않는다", "NULL이 된다", "두 개가 된다"], a: 1, e: "매뉴얼: 'The rowid of a migrated row does not change.' 그래서 인덱스로 찾아가면 한 번 더 따라가는 I/O가 생깁니다." },
+ { q: "ASSM 테이블스페이스에서 무시되는 저장 파라미터는?", o: ["PCTFREE", "PCTUSED", "INITRANS", "TABLESPACE"], a: 1, e: "ASSM은 비트맵으로 공간을 관리해 PCTUSED·FREELISTS를 쓰지 않습니다. PCTFREE는 여전히 의미가 있습니다." },
+ { q: "한 행 조각(row piece)에 담을 수 있는 최대 컬럼 수는?", o: ["127", "255", "1000", "4096"], a: 1, e: "255개입니다. 그보다 많은 컬럼의 행은 여러 조각으로 나뉘어 체이닝됩니다." },
+ { q: "STARTUP 시 가장 먼저 찾는 일반 파라미터 파일 이름은? (srvctl 지정 위치 제외)", o: ["init$ORACLE_SID.ora", "spfile.ora", "spfile$ORACLE_SID.ora", "config.ora"], a: 2, e: "spfile$ORACLE_SID.ora → spfile.ora → init$ORACLE_SID.ora 순서입니다." },
+ { q: "다음 기동 때 인스턴스 복구가 필요한 SHUTDOWN 모드는?", o: ["NORMAL", "TRANSACTIONAL", "IMMEDIATE", "ABORT"], a: 3, e: "ABORT는 커밋 안 된 트랜잭션을 롤백하지 않고 바로 내려서, 다음 기동 시 자동 인스턴스 복구가 수행됩니다." },
+ { q: "Linux에서 HugePages와 함께 쓸 수 없는 메모리 설정은?", o: ["SGA_TARGET", "PGA_AGGREGATE_TARGET", "MEMORY_TARGET (AMM)", "DB_CACHE_SIZE"], a: 2, e: "19c Linux 매뉴얼: MEMORY_TARGET·MEMORY_MAX_TARGET은 huge pages와 함께 쓸 수 없습니다. ASMM(SGA_TARGET)을 씁니다." },
+ { q: "RMAN 백업·복구 전용으로 나뉜 관리 권한은?", o: ["SYSOPER", "SYSBACKUP", "SYSKM", "SYSDG"], a: 1, e: "SYSBACKUP은 백업·복구에 필요한 권한만 가집니다. SYSDG는 Data Guard, SYSKM은 키 관리입니다." },
+ { q: "INSERT·UPDATE·DELETE가 테이블에 거는 TM 잠금 모드는?", o: ["RS (2)", "RX (3)", "S (4)", "X (6)"], a: 1, e: "DML은 테이블에 RX(Row Exclusive, LMODE 3)를 겁니다. RX끼리는 공존하므로 서로 다른 행은 동시에 수정 가능합니다." },
+ { q: "V$LOCK에서 다른 세션을 막고 있는 잠금을 나타내는 컬럼 값은?", o: ["REQUEST > 0", "BLOCK > 0", "LMODE = 0", "CTIME = 0"], a: 1, e: "BLOCK이 0보다 크면 이 잠금이 다른 세션을 막고 있습니다. REQUEST > 0은 잠금을 기다리는 쪽입니다." }
+]},
+/* ───── 2호선 공간관리 ───── */
+space: { lessons: [
+{ id:"space-13", title:"Flashback Query·Version Query로 과거 데이터 보기", min:6, ref:[["Database Development Guide 19c · Using Oracle Flashback Technology", D + "adfns/flashback.html"], ["SQL Language Reference 19c · SELECT (flashback_query_clause)", D + "sqlrf/SELECT.html"]], body:[
+ ["p","\"방금 잘못 UPDATE했어요\"라는 전화에 백업 복구 전에 먼저 꺼내는 도구입니다. Undo에 남아 있는 과거 이미지를 읽으므로, 보존 시간(UNDO_RETENTION, 실제로는 V$UNDOSTAT.TUNED_UNDORETENTION) 안의 시점만 볼 수 있습니다."],
+ ["code","sql","-- ① Flashback Query: 특정 시점의 데이터\nSELECT * FROM app.orders\nAS OF TIMESTAMP (SYSTIMESTAMP - INTERVAL '30' MINUTE)\nWHERE order_id = 1001;\n\n-- 잘못 지운 행 되살리기 (매뉴얼 예제와 같은 방식)\nINSERT INTO app.orders\n  SELECT * FROM app.orders AS OF TIMESTAMP TO_TIMESTAMP('2026-11-19 09:30:00','YYYY-MM-DD HH24:MI:SS')\n  WHERE order_id = 1001;\n\n-- ② Flashback Version Query: 그 행이 언제 어떻게 바뀌었나\nSELECT versions_starttime, versions_endtime, versions_xid, versions_operation, status, amount\nFROM   app.orders\nVERSIONS BETWEEN TIMESTAMP SYSTIMESTAMP - INTERVAL '1' HOUR AND SYSTIMESTAMP\nWHERE  order_id = 1001\nORDER  BY versions_startscn NULLS FIRST;"],
+ ["tbl",[["의사 컬럼","뜻"],["VERSIONS_STARTTIME / STARTSCN","그 버전이 생긴 시점 (NULL이면 조회 구간 시작 전부터 있던 버전)"],["VERSIONS_ENDTIME / ENDSCN","그 버전이 끝난 시점 (NULL이면 지금도 현재 버전이거나, DELETE 행)"],["VERSIONS_XID","그 버전을 만든 트랜잭션 ID"],["VERSIONS_OPERATION","I(입력) / U(수정) / D(삭제)"]]],
+ ["ul",["시각으로 지정하면 실제 조회 시점이 최대 3초까지 앞당겨질 수 있습니다. 정확한 지점이 필요하면 SCN을 쓰세요.","컬럼 삭제·테이블 MOVE·TRUNCATE·제약조건 추가처럼 구조를 바꾸는 DDL 이전 시점은 볼 수 없습니다(ORA-01466).","V$ 동적 성능 뷰는 과거 시점으로 조회할 수 없습니다.","③ FLASHBACK_TRANSACTION_QUERY 뷰는 트랜잭션별 되돌림 SQL(UNDO_SQL)을 보여주지만, Supplemental logging과 SELECT ANY TRANSACTION 권한이 필요하고 CDB에서는 지원되지 않습니다."]],
+ ["warn","Undo는 보존 기간이 지나면 덮어써질 수 있습니다(RETENTION GUARANTEE가 없으면 보장되지 않음). 실수 신고를 받으면 가장 먼저 그 시점 데이터를 CREATE TABLE … AS SELECT … AS OF 로 떠 두세요."]
+]},
+{ id:"space-14", title:"테이블 온라인 재구성: MOVE ONLINE", min:4, ref:[["Administrator's Guide 19c · Managing Tables", D + "admin/managing-tables.html"], ["Database Licensing Information 19c", D + "dblic/Licensing-Information.html"]], body:[
+ ["p","테이블을 다른 테이블스페이스로 옮기거나, HWM을 낮추거나, 압축·PCTFREE를 바꾸려면 ALTER TABLE … MOVE로 새 세그먼트에 다시 씁니다."],
+ ["tbl",[["방식","업무 영향","인덱스"],["MOVE (온라인 아님)","이동 중 DML 불가","ROWID가 바뀌어 인덱스가 UNUSABLE → ORA-01502, 재빌드 필요"],["MOVE ONLINE … UPDATE INDEXES","이동 중에도 DML 계속 가능","매뉴얼: ONLINE과 UPDATE INDEXES를 함께 쓰면 이동 중에도 인덱스가 계속 사용 가능"]]],
+ ["code","sql","-- 업무 중 테이블 이동 (19c EE: 온라인 테이블 이동은 별도 옵션 없이 포함)\nALTER TABLE app.batch_log MOVE ONLINE TABLESPACE app_data UPDATE INDEXES;\n\n-- 파티션 단위 이동도 ONLINE 지원\nALTER TABLE app.orders_hist MOVE PARTITION p202409 ONLINE TABLESPACE hist_data UPDATE INDEXES;\n\n-- 확인\nSELECT index_name, status FROM dba_indexes WHERE table_owner = 'APP' AND table_name = 'BATCH_LOG';"],
+ ["ul",["이동하는 동안 원본과 새 세그먼트가 함께 존재하므로 대상 테이블스페이스에 테이블 크기만큼 여유가 있어야 합니다.","라이선스: 19c EE에서 온라인 테이블 이동·온라인 재정의(DBMS_REDEFINITION)·온라인 인덱스 재빌드는 포함 기능입니다. 단, '압축 형식으로의 온라인 파티션 이동'은 Advanced Compression 옵션입니다."]],
+ ["tip","실습 SQL d34의 IX_BATCH_LOG_01이 UNUSABLE이 된 이유가 바로 'ONLINE 없이 MOVE'입니다. 다음 작업부터는 MOVE ONLINE … UPDATE INDEXES를 표준으로 쓰세요."]
+]}],
+ quiz: [
+ { q: "Flashback Query가 과거 데이터를 읽어 오는 곳은?", o: ["아카이브 로그", "Undo", "FRA의 Flashback 로그", "RMAN 백업"], a: 1, e: "Flashback Query·Version Query·Transaction Query는 Undo 데이터를 사용합니다. 그래서 Undo 보존 시간이 한계입니다." },
+ { q: "Flashback Version Query의 VERSIONS_OPERATION 값 'D'의 의미는?", o: ["DDL", "DELETE", "DEFAULT", "DUPLICATE"], a: 1, e: "I=입력, U=수정, D=삭제입니다. D 행은 삭제되기 직전의 값을 보여줍니다." },
+ { q: "AS OF TIMESTAMP로 조회할 때 정확한 지점을 원하면 SCN을 쓰라는 이유는?", o: ["시각 지정은 지원되지 않아서", "시각→SCN 변환 때문에 최대 3초 이른 시점이 조회될 수 있어서", "SCN이 더 빨라서", "RAC에서만 필요해서"], a: 1, e: "매뉴얼: 시각으로 지정하면 실제 조회 시점이 최대 3초 앞설 수 있습니다." },
+ { q: "어떤 작업 이전 시점은 Flashback Query로 볼 수 없나(ORA-01466)?", o: ["INSERT", "테이블 MOVE·TRUNCATE·컬럼 삭제 같은 구조 변경 DDL", "COMMIT", "통계 수집"], a: 1, e: "구조를 바꾸는 DDL은 그 테이블의 기존 Undo를 무효화합니다. PCTFREE 같은 저장 속성 변경은 해당하지 않습니다." },
+ { q: "ONLINE 없이 ALTER TABLE … MOVE를 하면 인덱스는?", o: ["그대로 VALID", "ROWID가 바뀌어 UNUSABLE이 된다", "자동 삭제된다", "INVISIBLE이 된다"], a: 1, e: "UNUSABLE이 되어 그 인덱스를 쓰는 DML이 ORA-01502를 받습니다. 재빌드가 필요합니다." },
+ { q: "19c EE에서 ALTER TABLE … MOVE ONLINE의 라이선스는?", o: ["Advanced Compression 필요", "Partitioning 필요", "EE에 포함", "Diagnostics Pack 필요"], a: 2, e: "라이선스 문서상 온라인 테이블 이동은 EE에 포함됩니다(압축 형식으로의 온라인 파티션 이동은 Advanced Compression)." }
+]},
+/* ───── 3호선 백업·복구 ───── */
+rman: { lessons: [
+{ id:"rman-13", title:"RMAN으로 테이블 하나만 복구 (RECOVER TABLE)", min:6, ref:[["Backup and Recovery User's Guide 19c · Recovering Tables and Table Partitions", D + "bradv/rman-recovering-tables-partitions.html"], ["Backup and Recovery Reference 19c · RECOVER", D + "rcmrf/RECOVER.html"]], body:[
+ ["p","Undo가 이미 덮어써져 Flashback Query로는 못 되돌리고, 휴지통에도 없을 때 쓰는 방법입니다. RMAN이 알아서 보조(auxiliary) DB를 같은 서버에 만들어 그 시점까지 복구하고, Data Pump로 테이블만 꺼내 원래 DB에 넣어 줍니다."],
+ ["ul",["조건: 대상 DB가 READ WRITE·ARCHIVELOG 모드, 그 시점의 RMAN 백업 존재. 파티션 단위 복구는 COMPATIBLE 11.1.0 이상.","필요한 백업: Undo·SYSTEM·SYSAUX와 그 테이블이 있는 테이블스페이스(인덱스가 다른 테이블스페이스에 있으면 그것도).","대상 DB에 로컬로 접속해서 실행해야 합니다.","라이선스: 19c EE에 포함된 기능입니다."]],
+ ["code","rman","# 하루 전 시점의 테이블을 다른 이름으로 복구 (원본은 그대로 두고 비교)\nRECOVER TABLE app.orders\n  UNTIL TIME 'SYSDATE-1'\n  AUXILIARY DESTINATION '/u02/rman_aux'\n  REMAP TABLE app.orders:orders_recovered;\n\n# 덤프 파일만 만들고 가져오기는 나중에 (NOTABLEIMPORT)\nRECOVER TABLE app.orders, app.order_items\n  UNTIL SCN 118837265001\n  AUXILIARY DESTINATION '/u02/rman_aux'\n  DATAPUMP DESTINATION '/u02/dp_dump'\n  DUMP FILE 'orders_recover.dmp'\n  NOTABLEIMPORT;\n\n# PDB의 테이블\nRECOVER TABLE hr.emp OF PLUGGABLE DATABASE hrpdb\n  UNTIL TIME 'SYSDATE-4'\n  AUXILIARY DESTINATION '/u02/rman_aux'\n  REMAP TABLE 'HR'.'EMP':'EMP_RECVR';"],
+ ["tbl",[["제약","내용"],["복구 불가 대상","SYS 스키마 테이블, SYSTEM·SYSAUX 테이블스페이스의 테이블, Standby DB에서의 실행"],["REMAP TABLE 사용 시","이름 있는 NOT NULL 제약이 있는 테이블은 REMAP으로 복구 불가, 이름 있는 제약·인덱스는 가져오지 않음"],["같은 이름이 이미 있으면","REMAP TABLE을 써야 함"]]],
+ ["warn","AUXILIARY DESTINATION에는 보조 DB의 SYSTEM·SYSAUX·Undo·대상 테이블스페이스가 복원될 만큼 공간이 필요합니다. RMAN이 시작 전에 공간을 확인해 부족하면 에러로 끝냅니다. 운영 디스크그룹이 아니라 여유 있는 별도 파일시스템을 지정하세요."],
+ ["tip","원본 테이블을 바로 덮어쓰지 말고 REMAP TABLE로 다른 이름에 복구한 뒤, 업무 담당자와 데이터를 비교·확인하고 필요한 행만 옮기는 것이 안전한 순서입니다."]
+]}],
+ quiz: [
+ { q: "RMAN RECOVER TABLE이 내부적으로 하는 일은?", o: ["원본 DB를 그 시점으로 되돌린다", "보조 DB를 만들어 그 시점까지 복구한 뒤 Data Pump로 테이블만 가져온다", "Undo를 읽어 되돌린다", "휴지통에서 꺼낸다"], a: 1, e: "같은 서버에 보조 DB를 자동으로 만들고, 복구한 테이블을 덤프로 뽑아 대상 DB에 가져옵니다." },
+ { q: "RECOVER TABLE로 복구할 수 없는 것은?", o: ["APP 스키마 테이블", "SYS 스키마나 SYSTEM·SYSAUX 테이블스페이스의 테이블", "파티션 하나", "PDB의 테이블"], a: 1, e: "SYS 스키마, SYSTEM·SYSAUX의 테이블은 대상이 아닙니다. Standby에서도 실행할 수 없습니다." },
+ { q: "복구 결과를 덤프 파일로만 만들고 대상 DB에 가져오지 않게 하는 옵션은?", o: ["NOTABLEIMPORT", "NOCATALOG", "VALIDATE", "PREVIEW"], a: 0, e: "NOTABLEIMPORT를 주면 덤프만 만들고, 가져오기는 나중에 Data Pump Import로 직접 합니다." },
+ { q: "RECOVER TABLE에서 보조 DB 파일을 둘 위치를 지정하는 권장 방법은?", o: ["SET NEWNAME", "AUXILIARY DESTINATION", "DB_FILE_NAME_CONVERT", "FRA만 사용"], a: 1, e: "매뉴얼은 AUXILIARY DESTINATION을 권장합니다. SET NEWNAME은 파일 하나라도 빠뜨리면 복구가 실패합니다." }
+]},
+/* ───── 4호선 RAC ───── */
+rac: { lessons: [
+{ id:"rac-13", title:"시퀀스 CACHE·ORDER와 RAC", min:4, ref:[["SQL Language Reference 19c · CREATE SEQUENCE", D + "sqlrf/CREATE-SEQUENCE.html"], ["Real Application Clusters Administration 19c", D + "racad/index.html"]], body:[
+ ["p","시퀀스 CACHE는 번호를 미리 메모리에 받아 두는 개수입니다(기본 20). RAC에서는 **인스턴스마다 자기 캐시**를 가지므로, NOORDER(기본)이면 노드 1이 1~20, 노드 2가 21~40을 나눠 쓰는 식이라 전체적으로 번호가 순서대로 나오지 않습니다."],
+ ["tbl",[["설정","RAC에서의 동작","언제"],["CACHE n NOORDER (권장)","노드마다 번호 묶음을 따로 사용 — 빠름, 순서 보장 없음","PK용 번호 대부분"],["CACHE n ORDER","요청 순서대로 번호 보장 — 노드 간 조율 비용","번호를 '시간 순서'로 써야 할 때만"],["NOCACHE","매번 딕셔너리 갱신 — 매우 느림, 경합 큼","피하기"]]],
+ ["code","sql","-- 캐시가 작아 경합 나는 시퀀스 찾기\nSELECT sequence_owner, sequence_name, cache_size, order_flag, last_number\nFROM   dba_sequences WHERE sequence_owner = 'APP' ORDER BY cache_size;\n\nALTER SEQUENCE app.order_seq CACHE 1000;"],
+ ["ul",["매뉴얼: ORDER는 RAC에서 순서 보장이 필요할 때만 의미가 있습니다. PK 생성에는 순서 보장이 보통 중요하지 않습니다.","캐시된 번호는 인스턴스 종료·장애 시 사라질 수 있습니다(번호 건너뜀). 시퀀스는 '빈틈 없는 번호'를 보장하지 않습니다.","작은 캐시 + 높은 입력량 RAC 환경에서는 'enq: SQ - contention'이나 시퀀스 관련 gc 대기가 늘 수 있습니다."]],
+ ["tip","애플리케이션팀이 '번호가 건너뛰었다', '순서가 뒤죽박죽'이라고 문의하면, RAC + CACHE의 정상 동작임을 설명하고 업무상 꼭 필요한지(감사 번호 등) 확인한 뒤에만 ORDER나 별도 채번 테이블을 검토하세요."]
+]}],
+ quiz: [
+ { q: "CREATE SEQUENCE에서 CACHE를 지정하지 않았을 때 기본값은?", o: ["0", "10", "20", "1000"], a: 2, e: "기본 20개를 미리 메모리에 받아 둡니다. 입력이 많은 테이블의 시퀀스는 더 크게 잡는 경우가 많습니다." },
+ { q: "RAC에서 CACHE + NOORDER 시퀀스의 번호가 순서대로 나오지 않는 이유는?", o: ["버그", "인스턴스마다 자기 번호 묶음을 캐시해서", "SCN 차이", "시퀀스가 손상돼서"], a: 1, e: "노드별로 다른 번호 구간을 쓰기 때문입니다. 순서가 꼭 필요할 때만 ORDER를 씁니다." },
+ { q: "시퀀스가 보장하지 않는 것은?", o: ["유일성(CYCLE 아님)", "빈틈 없는 연속 번호", "숫자 증가 방향", "동시 접근"], a: 1, e: "캐시된 번호는 장애·종료 시 사라질 수 있어 번호가 건너뛸 수 있습니다." }
+]},
+/* ───── 7호선 성능 ───── */
+perf: { lessons: [
+{ id:"perf-15", title:"인덱스 상태: UNUSABLE·INVISIBLE과 비트맵", min:5, ref:[["Administrator's Guide 19c · Managing Indexes", D + "admin/managing-indexes.html"], ["Database Concepts 19c · Indexes and Index-Organized Tables", D + "cncpt/indexes-and-index-organized-tables.html"], ["SQL Language Reference 19c · CREATE INDEX", D + "sqlrf/CREATE-INDEX.html"]], body:[
+ ["tbl",[["상태","DML이 유지?","옵티마이저가 사용?","쓰는 곳"],["USABLE + VISIBLE (기본)","예","예","보통"],["UNUSABLE","아니요 (세그먼트도 삭제됨)","아니요","대량 적재 전에 잠시 꺼 두기 → 적재 후 REBUILD"],["INVISIBLE","예","아니요 (OPTIMIZER_USE_INVISIBLE_INDEXES = TRUE면 사용)","인덱스 삭제 전 영향 테스트, 새 인덱스 시험 도입"]]],
+ ["code","sql","-- 지우기 전에 안 보이게 해서 영향 확인 (DML 유지는 계속됨)\nALTER INDEX app.ix_orders_old INVISIBLE;\n-- 내 세션에서만 다시 써 보기\nALTER SESSION SET optimizer_use_invisible_indexes = TRUE;\n-- 문제 없으면 삭제, 문제 있으면 즉시 복구\nALTER INDEX app.ix_orders_old VISIBLE;\n\n-- 대량 적재 패턴\nALTER INDEX app.ix_stage_01 UNUSABLE;\n-- (적재)\nALTER INDEX app.ix_stage_01 REBUILD ONLINE;\n\nSELECT index_name, status, visibility FROM dba_indexes WHERE table_owner = 'APP';"],
+ ["ul",["인덱스를 UNUSABLE로 만들면 그 세그먼트가 삭제되어 공간도 돌려받습니다. 테이블을 TRUNCATE하면 UNUSABLE 인덱스가 다시 VALID가 됩니다.","SKIP_UNUSABLE_INDEXES(기본 TRUE) 덕분에 보통은 UNUSABLE 인덱스를 건너뛰지만, UNIQUE 인덱스가 UNUSABLE이면 그 테이블에 DML이 실패합니다.","**비트맵 인덱스**는 키 값 하나가 여러 행을 가리키는 구조라 동시 DML이 많은 OLTP에는 맞지 않고, 값 종류가 적은 컬럼의 조회 위주(DW) 환경용입니다. 모든 키 컬럼이 NULL인 행도 색인합니다(B-tree는 하지 않음)."]],
+ ["tip","'이 인덱스 지워도 되나요?' 질문에는 바로 DROP 대신 INVISIBLE로 며칠 두고 AWR에서 그 테이블 관련 SQL 성능이 변하지 않는지 확인하는 방법을 제안하세요. 되돌리는 데 1초면 됩니다."]
+]},
+{ id:"perf-16", title:"히스토그램: 데이터가 한쪽으로 쏠릴 때", min:5, ref:[["SQL Tuning Guide 19c · Histograms", D + "tgsql/histograms.html"]], body:[
+ ["p","통계에 '고유값 수'만 있으면 옵티마이저는 값이 고르게 퍼져 있다고 가정합니다. 실제로는 STATUS = 'DONE'이 99%, 'ERROR'가 0.01%처럼 쏠려 있으면 계획이 크게 틀릴 수 있습니다. 히스토그램은 컬럼 값 분포를 버킷으로 나눠 담은 통계입니다."],
+ ["ul",["언제 만들어지나: METHOD_OPT 기본값이 SIZE AUTO라서, 그 컬럼이 실제로 쿼리 조건에 쓰였고(SYS.COL_USAGE$에 기록) 분포가 쏠렸을 때 다음 통계 수집에서 자동으로 만듭니다. 조회된 적 없는 테이블에는 만들지 않습니다.","기본 버킷 수는 254개입니다."]],
+ ["tbl",[["종류","조건 (n = 버킷 수, 기본 254)"],["Frequency","고유값 수 ≤ n — 값마다 정확한 빈도"],["Top Frequency","고유값 수 > n 이지만 상위 n개 값이 거의 전부(약 99.6% 이상), AUTO_SAMPLE_SIZE"],["Hybrid","고유값 수 > n, Top Frequency 조건이 아님, AUTO_SAMPLE_SIZE"],["Height-Balanced (구식)","고유값 수 > n 이고 ESTIMATE_PERCENT를 직접 지정했을 때"]]],
+ ["code","sql","-- 어떤 컬럼에 어떤 히스토그램이 있나\nSELECT table_name, column_name, num_distinct, histogram, num_buckets, last_analyzed\nFROM   dba_tab_col_statistics\nWHERE  owner = 'APP' AND table_name = 'ORDERS';\n\n-- 버킷 내용\nSELECT endpoint_number, endpoint_value, endpoint_repeat_count\nFROM   dba_tab_histograms WHERE owner = 'APP' AND table_name = 'ORDERS' AND column_name = 'STATUS';"],
+ ["warn","ESTIMATE_PERCENT를 직접 숫자로 지정하면 12c 이후의 개선된 히스토그램(Top Frequency·Hybrid) 대신 옛 Height-Balanced가 만들어집니다. 특별한 이유가 없으면 기본값(AUTO_SAMPLE_SIZE)을 그대로 쓰세요."],
+ ["tip","바인드 변수 + 히스토그램 조합에서 실행 때마다 성능이 들쭉날쭉하면, 적응형 커서 공유(V$SQL의 IS_BIND_SENSITIVE·IS_BIND_AWARE)가 동작하는지 함께 봅니다(성능 노선 '바인드 변수' 레슨)."]
+]},
+{ id:"perf-17", title:"적응형 최적화 파라미터 2개", min:4, ref:[["Database Reference 19c · OPTIMIZER_ADAPTIVE_PLANS", D + "refrn/OPTIMIZER_ADAPTIVE_PLANS.html"], ["Database Reference 19c · OPTIMIZER_ADAPTIVE_STATISTICS", D + "refrn/OPTIMIZER_ADAPTIVE_STATISTICS.html"], ["SQL Tuning Guide 19c · Query Optimizer Concepts", D + "tgsql/query-optimizer-concepts.html"]], body:[
+ ["p","12.1의 OPTIMIZER_ADAPTIVE_FEATURES가 12.2부터 둘로 나뉘었습니다. 19c 기본값을 외워 두면 '업그레이드 후 계획이 흔들린다' 문의에 바로 답할 수 있습니다."],
+ ["tbl",[["파라미터","19c 기본값","끄면 꺼지는 기능"],["OPTIMIZER_ADAPTIVE_PLANS","TRUE","실행 중 Nested Loops ↔ Hash Join 전환, Star 변환 비트맵 프루닝, 적응형 병렬 분배"],["OPTIMIZER_ADAPTIVE_STATISTICS","FALSE","SQL Plan Directive, 조인 통계 피드백, 병렬 실행의 적응형 동적 샘플링"]]],
+ ["code","sql","SHOW PARAMETER optimizer_adaptive\nSHOW PARAMETER optimizer_features_enable\n\n-- 실행계획이 적응형으로 바뀌었는지 (+ADAPTIVE 포맷)\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR('&sql_id', NULL, '+ADAPTIVE'));"],
+ ["ul",["두 파라미터 모두 ALTER SYSTEM·ALTER SESSION으로 바꿀 수 있고, RAC는 모든 인스턴스가 같은 값이어야 합니다.","OPTIMIZER_ADAPTIVE_STATISTICS = FALSE여도 단일 테이블 카디널리티 오차에 대한 통계 피드백은 남아 있습니다.","12.1에서 업그레이드한 DB라면 예전 OPTIMIZER_ADAPTIVE_FEATURES 설정이 남아 있지 않은지 확인하세요(12.2부터 폐기)."]],
+ ["tip","특정 애플리케이션(패키지 솔루션)은 벤더가 이 값을 FALSE로 권장하기도 합니다. 바꾸기 전에 벤더 권고 문서를 확인하고, 시스템 단위보다 세션·SQL 단위 테스트부터 하세요."]
+]}],
+ quiz: [
+ { q: "INVISIBLE 인덱스의 동작으로 옳은 것은?", o: ["DML 유지도 안 되고 사용도 안 됨", "DML로 유지되지만 옵티마이저는 기본적으로 사용하지 않음", "세그먼트가 삭제됨", "읽기 전용 테이블에만 가능"], a: 1, e: "INVISIBLE은 유지는 되지만 OPTIMIZER_USE_INVISIBLE_INDEXES = TRUE가 아니면 쓰지 않습니다. 삭제 전 영향 테스트에 좋습니다." },
+ { q: "인덱스를 UNUSABLE로 만들면 세그먼트는?", o: ["그대로 남는다", "삭제된다", "INVISIBLE로 바뀐다", "다른 테이블스페이스로 옮겨진다"], a: 1, e: "11.2부터 UNUSABLE로 만들면 세그먼트가 삭제됩니다. REBUILD하면 다시 만들어집니다." },
+ { q: "비트맵 인덱스가 OLTP에 맞지 않는 이유는?", o: ["NULL을 색인하지 못해서", "키 하나가 많은 행을 가리켜 동시 DML 시 잠금 경합이 커서", "크기가 커서", "파티션 불가"], a: 1, e: "키 값 하나의 비트맵이 여러 행을 대표하므로 동시 수정에 불리합니다. 조회 위주 DW용입니다." },
+ { q: "히스토그램의 기본 버킷 수는?", o: ["64", "128", "254", "2048"], a: 2, e: "기본 254개입니다(SIZE AUTO 기준)." },
+ { q: "통계 수집 시 ESTIMATE_PERCENT를 숫자로 직접 지정하면 만들어질 수 있는 구식 히스토그램은?", o: ["Frequency", "Top Frequency", "Hybrid", "Height-Balanced"], a: 3, e: "Top Frequency·Hybrid는 AUTO_SAMPLE_SIZE일 때 만들어집니다. 직접 지정하면 Height-Balanced(legacy)가 될 수 있습니다." },
+ { q: "SIZE AUTO에서 히스토그램이 자동으로 만들어지는 조건으로 옳은 것은?", o: ["모든 컬럼에 항상", "그 컬럼이 쿼리 조건에 쓰인 기록이 있을 때", "PK 컬럼에만", "인덱스가 있는 컬럼에만"], a: 1, e: "컬럼 사용 기록(SYS.COL_USAGE$)과 데이터 분포를 보고 결정합니다. 조회된 적 없는 테이블에는 만들지 않습니다." },
+ { q: "19c에서 OPTIMIZER_ADAPTIVE_STATISTICS의 기본값은?", o: ["TRUE", "FALSE", "AUTO", "NULL"], a: 1, e: "기본 FALSE입니다. OPTIMIZER_ADAPTIVE_PLANS는 기본 TRUE입니다." },
+ { q: "OPTIMIZER_ADAPTIVE_PLANS를 FALSE로 하면 꺼지는 기능은?", o: ["SQL Plan Directive", "실행 중 Nested Loops/Hash Join 전환", "히스토그램", "바인드 피킹"], a: 1, e: "적응형 계획(조인 방식 전환, Star 변환 비트맵 프루닝, 적응형 병렬 분배)이 꺼집니다. SQL Plan Directive는 ADAPTIVE_STATISTICS 쪽입니다." }
+]},
+/* ───── 8호선 보안 ───── */
+sec: { lessons: [
+{ id:"sec-11", title:"권한 분석 (Privilege Analysis)", min:5, ref:[["PL/SQL Packages and Types Reference 19c · DBMS_PRIVILEGE_CAPTURE", D + "arpls/DBMS_PRIVILEGE_CAPTURE.html"], ["Database Reference 19c · DBA_UNUSED_PRIVS", D + "refrn/DBA_UNUSED_PRIVS.html"], ["Database Licensing Information 19c", D + "dblic/Licensing-Information.html"]], body:[
+ ["p","\"이 계정에 DBA 롤이 왜 있어요? 줄여 주세요\" — 그런데 무엇을 실제로 쓰는지 모르면 함부로 뺄 수 없습니다. 권한 분석은 일정 기간 실제로 사용된 권한과 안 쓰인 권한을 기록해 줍니다. 19c 라이선스 문서상 EE에 포함된 기능입니다."],
+ ["code","sql","-- CAPTURE_ADMIN 롤이 있는 계정으로\n-- STEP 1. 정책 만들기 (특정 롤 사용 분석 예)\nBEGIN\n  DBMS_PRIVILEGE_CAPTURE.CREATE_CAPTURE(\n    name        => 'APP_USER_DBA_ROLE',\n    description => 'APP_USER가 DBA 롤에서 실제로 쓰는 권한',\n    type        => DBMS_PRIVILEGE_CAPTURE.G_ROLE,\n    roles       => role_name_list('DBA'));\nEND;\n/\n-- STEP 2. 기록 시작 (월말 배치까지 포함하도록 충분히 길게)\nEXEC DBMS_PRIVILEGE_CAPTURE.ENABLE_CAPTURE('APP_USER_DBA_ROLE');\n\n-- STEP 3. 기간이 지나면 중지 → 결과 생성\nEXEC DBMS_PRIVILEGE_CAPTURE.DISABLE_CAPTURE('APP_USER_DBA_ROLE');\nEXEC DBMS_PRIVILEGE_CAPTURE.GENERATE_RESULT('APP_USER_DBA_ROLE');\n\n-- STEP 4. 쓴 권한 / 안 쓴 권한\nSELECT username, used_role, sys_priv, obj_priv, object_owner, object_name FROM dba_used_privs  WHERE capture = 'APP_USER_DBA_ROLE';\nSELECT username, sys_priv, obj_priv, object_owner, object_name             FROM dba_unused_privs WHERE capture = 'APP_USER_DBA_ROLE';"],
+ ["tbl",[["분석 유형","대상"],["G_DATABASE","DB 전체의 권한 사용 (SYS 사용자 제외)"],["G_ROLE","지정한 롤"],["G_CONTEXT","조건(예: 특정 모듈·사용자)이 참일 때"],["G_ROLE_AND_CONTEXT","지정한 롤 + 조건"]]],
+ ["tip","보안 진단 대응으로 'DBA 롤 회수' 지적을 받았을 때, 권한 분석 결과(DBA_USED_PRIVS)로 실제 필요한 권한 목록을 만들어 전용 롤을 새로 주고 DBA를 회수하면 근거 있는 조치가 됩니다. 분석 기간에 월말·분기 배치가 포함되게 잡으세요."]
+]}],
+ quiz: [
+ { q: "권한 분석 결과 중 '안 쓰인 권한'을 보여주는 뷰는?", o: ["DBA_SYS_PRIVS", "DBA_USED_PRIVS", "DBA_UNUSED_PRIVS", "DBA_ROLE_PRIVS"], a: 2, e: "GENERATE_RESULT 후 DBA_UNUSED_PRIVS(안 쓴 권한)와 DBA_USED_PRIVS(쓴 권한)에 결과가 채워집니다." },
+ { q: "권한 분석 기록을 멈춘 뒤 결과 뷰를 채우는 프로시저는?", o: ["ENABLE_CAPTURE", "DISABLE_CAPTURE", "GENERATE_RESULT", "DROP_CAPTURE"], a: 2, e: "DISABLE_CAPTURE로 기록을 멈추고 GENERATE_RESULT로 결과를 만듭니다." },
+ { q: "권한 분석 정책을 관리하는 데 필요한 롤은?", o: ["DBA", "CAPTURE_ADMIN", "AUDIT_ADMIN", "SELECT_CATALOG_ROLE"], a: 1, e: "CAPTURE_ADMIN 롤이 있어야 DBMS_PRIVILEGE_CAPTURE를 쓰고 결과 뷰를 볼 수 있습니다." },
+ { q: "19c EE에서 권한 분석(Privilege Analysis)의 라이선스는?", o: ["Database Vault 필요", "Advanced Security 필요", "EE에 포함", "Diagnostics Pack 필요"], a: 2, e: "19c 라이선스 문서 기준 EE에 포함된 기능입니다." }
+]},
+/* ───── 9호선 Data Guard ───── */
+dg: { lessons: [
+{ id:"dg-11", title:"Fast-Start Failover와 Observer", min:6, ref:[["Data Guard Broker 19c · Switchover and Failover Operations", D + "dgbkr/using-data-guard-broker-to-manage-switchovers-failovers.html"], ["Data Guard Broker 19c · Broker Properties", D + "dgbkr/oracle-data-guard-broker-properties.html"]], body:[
+ ["p","Fast-Start Failover(FSFO)는 Primary가 사라졌을 때 브로커가 사람 없이 미리 정한 Standby로 자동 Failover하는 기능입니다. 판단은 Primary·Standby와 **다른 서버**에서 도는 Observer(DGMGRL 클라이언트)가 합니다."],
+ ["p","**동작:** Observer와 대상 Standby가 **둘 다** Primary와의 연결을 FastStartFailoverThreshold초 넘게 잃으면 Failover가 시작됩니다. 끝난 뒤 옛 Primary가 다시 연결되면 자동으로 Standby로 되돌려집니다(reinstate, 단 Failover 전에 Flashback Database가 켜져 있고 로그가 충분해야 함)."],
+ ["tbl",[["속성","19c 기본값","뜻"],["FastStartFailoverThreshold","30초 (최소 6초)","연결이 끊긴 뒤 Failover까지 기다리는 시간"],["FastStartFailoverLagLimit","30초 (최소 5초)","Max Performance에서 허용하는 데이터 손실 한도"],["FastStartFailoverAutoReinstate","TRUE","옛 Primary 자동 복귀"],["FastStartFailoverPmyShutdown","TRUE","고립된 Primary가 사용자 요청을 받지 않도록 스스로 종료"]]],
+ ["code","bash","# Observer 서버 (Primary·Standby와 다른 서버, DGMGRL과 tnsnames.ora 준비)\ndgmgrl sys@DBBIG\nDGMGRL> EDIT DATABASE 'DBBIG' SET PROPERTY FastStartFailoverTarget = 'DBBIG_STBY';\nDGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold = 45;\nDGMGRL> ENABLE FAST_START FAILOVER;\nDGMGRL> START OBSERVER obs1 IN BACKGROUND;\nDGMGRL> SHOW FAST_START FAILOVER;\nDGMGRL> SHOW CONFIGURATION VERBOSE;"],
+ ["tbl",[["보호 모드","대상 Standby의 LogXptMode"],["Maximum Availability","SYNC 또는 FASTSYNC (데이터 손실 0이 목표면 LagLimit = 0)"],["Maximum Performance","ASYNC (LagLimit만큼 손실 허용)"],["Maximum Protection","SYNC"]]],
+ ["ul",["기본 상태 조건 중 Datafile Write Errors, Corrupted Dictionary, Corrupted Controlfile은 켜져 있고, Inaccessible Logfile, Stuck Archiver는 꺼져 있습니다(ENABLE FAST_START FAILOVER CONDITION으로 조정).","Observer가 멈추면 SHOW CONFIGURATION에 'ORA-16819: fast-start failover observer not started' 경고가 뜹니다 — 모니터링 항목에 넣으세요."]],
+ ["warn","Observer를 Primary와 같은 서버·같은 장애 영역에 두면 의미가 없습니다. 제3의 위치(가능하면 별도 사이트)에 두고, 네트워크 단절 시 의도치 않은 Failover가 날 수 있으니 Threshold는 네트워크 순단 시간을 고려해 정합니다."]
+]},
+{ id:"dg-12", title:"Far Sync: 멀리 있는 DR에서도 데이터 손실 0", min:4, ref:[["Data Guard Concepts and Administration 19c · Using Far Sync Instances", D + "sbydb/creating-oracle-data-guard-far-sync-instance.html"], ["Database Licensing Information 19c", D + "dblic/Licensing-Information.html"]], body:[
+ ["p","DR 센터가 멀면 SYNC 전송은 왕복 지연만큼 커밋이 느려지고, ASYNC는 장애 시 약간의 손실이 생깁니다. **Far Sync**는 Primary 가까이에 데이터파일 없는 가벼운 인스턴스를 두고, 거기까지는 SYNC로 받아 원격 Standby로는 ASYNC로 넘겨 줍니다."],
+ ["ul",["Far Sync 인스턴스는 컨트롤파일·SPFILE·비밀번호 파일·Standby Redo Log만 있고 데이터파일이 없으며, Redo를 적용(복구)하지 않습니다.","Primary가 죽어도 Far Sync가 동기화돼 있었다면, 원격 Standby가 Far Sync에 남은 Redo까지 받아 데이터 손실 없이 Failover할 수 있습니다.","라이선스: Far Sync는 Active Data Guard 옵션 기능입니다(EE 기본 아님).","Fast-Start Failover는 Far Sync를 거쳐 Redo를 받는 Standby를 대상으로 Maximum Availability에서 쓸 수 있습니다."]],
+ ["code","sql","-- Primary에서 Far Sync용 컨트롤파일 만들기\nALTER DATABASE CREATE FAR SYNC INSTANCE CONTROLFILE AS '/tmp/fs_control.ctl';\n-- (Far Sync 서버로 복사 → pfile의 db_name은 Primary와 같게, db_unique_name은 다르게 → MOUNT)\n\n-- 브로커에 추가\n-- DGMGRL> ADD FAR_SYNC 'DBBIG_FS' AS CONNECT IDENTIFIER IS dbbig_fs;\n-- DGMGRL> EDIT DATABASE 'DBBIG' SET PROPERTY RedoRoutes = '(LOCAL : DBBIG_FS SYNC)';\n-- DGMGRL> EDIT FAR_SYNC 'DBBIG_FS' SET PROPERTY RedoRoutes = '(DBBIG : DBBIG_STBY ASYNC)';\n-- DGMGRL> ENABLE FAR_SYNC 'DBBIG_FS';"],
+ ["tip","Far Sync도 장애 지점이 될 수 있으니 매뉴얼은 대체 경로(ALTERNATE 목적지 또는 두 번째 Far Sync)를 함께 구성하도록 안내합니다. 제안서에 Far Sync를 넣을 때 이중화 여부를 꼭 같이 적으세요."]
+]},
+{ id:"dg-13", title:"Primary 변경이 Standby에 미치는 영향", min:5, ref:[["Data Guard Concepts and Administration 19c · Managing Physical and Snapshot Standby Databases", D + "sbydb/managing-oracle-data-guard-physical-standby-databases.html"], ["Data Guard Concepts and Administration 19c · Troubleshooting Oracle Data Guard", D + "sbydb/troubleshooting-oracle-data-guard.html"]], body:[
+ ["p","Physical Standby는 Redo를 그대로 적용하므로 대부분의 변경이 자동으로 따라가지만, 파일 위치가 걸린 일부 작업은 손이 갑니다. 기준이 되는 파라미터가 **STANDBY_FILE_MANAGEMENT**입니다(권장 AUTO)."],
+ ["tbl",[["Primary 작업","Standby에서 할 일"],["데이터파일 추가·테이블스페이스 생성","AUTO면 자동 생성. MANUAL이면 파일을 직접 만들어야 함"],["테이블스페이스 삭제·데이터파일 삭제","그 Redo가 Standby에 적용된 뒤 Standby 쪽 파일도 삭제 (OMF/ASM이면 자동)"],["데이터파일 이름 변경 (RENAME)","Standby에서도 직접 변경 — AUTO 상태에서는 RENAME 불가라 잠시 MANUAL로 바꿔서 수행"],["리두 로그 그룹 추가·삭제","Standby 구성(SRL 포함)을 검토해 같이 맞춤"],["NOLOGGING 작업","그 데이터파일을 Standby로 다시 복사해야 함 (FORCE LOGGING 권장)"],["비밀번호 파일 변경","Standby의 비밀번호 파일도 교체"]]],
+ ["code","sql","-- Standby에서\nSHOW PARAMETER standby_file_management\nSHOW PARAMETER db_file_name_convert\n\n-- Primary에서: NOLOGGING 사고를 막는 설정\nSELECT force_logging FROM v$database;\nALTER DATABASE FORCE LOGGING;\n\n-- Standby 데이터파일 이름 변경이 필요할 때 (적용 중지 → MANUAL → 변경 → AUTO)\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;\nALTER SYSTEM SET standby_file_management = MANUAL;\n-- (파일 이동·ALTER DATABASE RENAME FILE …)\nALTER SYSTEM SET standby_file_management = AUTO;\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT;"],
+ ["tip","Primary에 데이터파일을 추가했는데 Standby 디스크그룹 공간이 모자라면 MRP가 멈춥니다. 데이터파일 추가 작업계획서에는 'Standby 디스크그룹 여유 확인'을 사전 점검 STEP으로 넣으세요."]
+]}],
+ quiz: [
+ { q: "Fast-Start Failover가 시작되는 조건은?", o: ["Primary CPU 90% 초과", "Observer와 대상 Standby가 모두 Primary와 Threshold초 넘게 연결을 잃음", "아카이브 Gap 발생", "관리자가 SWITCHOVER 실행"], a: 1, e: "Observer와 Standby 둘 다 Primary를 못 보는 상태가 FastStartFailoverThreshold를 넘으면 자동 Failover합니다." },
+ { q: "19c 브로커의 FastStartFailoverThreshold 기본값은?", o: ["6초", "30초", "60초", "180초"], a: 1, e: "기본 30초, 최소 6초입니다." },
+ { q: "FSFO 후 옛 Primary를 자동으로 Standby로 되돌리게 하는 속성과 기본값은?", o: ["FastStartFailoverPmyShutdown = FALSE", "FastStartFailoverAutoReinstate = TRUE", "ObserverReconnect = 0", "LogXptMode = SYNC"], a: 1, e: "AutoReinstate 기본 TRUE입니다. 단, Failover 전에 Flashback Database가 켜져 있어야 reinstate가 성공합니다." },
+ { q: "Observer를 둘 위치로 가장 적절한 곳은?", o: ["Primary 서버", "Standby 서버", "Primary·Standby와 다른 제3의 서버", "Far Sync 서버"], a: 2, e: "Observer는 Primary·Standby와 다른 컴퓨터에서 돌아야 장애를 객관적으로 판단할 수 있습니다." },
+ { q: "Far Sync 인스턴스에 없는 것은?", o: ["컨트롤파일", "Standby Redo Log", "데이터파일", "비밀번호 파일"], a: 2, e: "Far Sync는 데이터파일 없이 Redo를 받아 전달만 하는 가벼운 인스턴스입니다." },
+ { q: "Far Sync를 쓰기 위한 라이선스는?", o: ["EE 기본 포함", "Active Data Guard 옵션", "Advanced Compression", "RAC 옵션"], a: 1, e: "Far Sync는 Active Data Guard 옵션 기능입니다." },
+ { q: "STANDBY_FILE_MANAGEMENT = AUTO일 때 Standby에서 할 수 없는 작업은?", o: ["MRP 시작", "데이터파일 RENAME", "읽기 전용 열기", "아카이브 적용"], a: 1, e: "AUTO에서는 ALTER DATABASE RENAME FILE 같은 파일 관리 명령이 막혀 있어, 잠시 MANUAL로 바꿔 작업합니다." },
+ { q: "Primary의 NOLOGGING 작업이 Standby에 문제를 만드는 것을 막는 설정은?", o: ["ARCHIVELOG", "FORCE LOGGING", "FLASHBACK ON", "SUPPLEMENTAL LOG DATA"], a: 1, e: "FORCE LOGGING이면 NOLOGGING을 지정해도 Redo가 생성되어 Standby가 정상 적용합니다." }
+]},
+/* ───── 12호선 장애대응 ───── */
+trouble: { lessons: [
+{ id:"tr-15", title:"ORA-01000 maximum open cursors exceeded", min:4, ref:[["Database Reference 19c · OPEN_CURSORS", D + "refrn/OPEN_CURSORS.html"]], body:[
+ ["p","OPEN_CURSORS는 세션 하나가 동시에 열어 둘 수 있는 커서 수 한도입니다. 19c 기본값은 50, 범위는 0~65535입니다. 넘으면 그 세션이 ORA-01000을 받습니다."],
+ ["code","sql","-- 세션별로 지금 열려 있는 커서 수 Top (RAC 전체)\nSELECT s.inst_id, s.sid, s.username, s.program, st.value AS open_cursors\nFROM   gv$sesstat st JOIN v$statname n ON n.statistic# = st.statistic#\n       JOIN gv$session s ON s.inst_id = st.inst_id AND s.sid = st.sid\nWHERE  n.name = 'opened cursors current'\nORDER  BY st.value DESC FETCH FIRST 10 ROWS ONLY;\n\n-- 그 세션이 어떤 SQL을 열어 두었나 (같은 SQL이 많이 반복되면 닫지 않는 코드)\nSELECT sql_id, COUNT(*) cnt, MAX(sql_text) sql_text\nFROM   gv$open_cursor WHERE inst_id = &inst AND sid = &sid\nGROUP  BY sql_id ORDER BY cnt DESC;\n\n-- 한도 올리기 (동적)\nALTER SYSTEM SET open_cursors = 1000 SCOPE=BOTH SID='*';"],
+ ["ul",["매뉴얼: 세션이 실제로 그만큼 열지 않는 한, 값을 필요보다 높게 잡아도 추가 오버헤드는 없습니다. 그래서 운영계는 보통 수백~수천으로 둡니다.","하지만 같은 SQL 커서가 계속 쌓인다면 애플리케이션이 ResultSet·Statement를 닫지 않는 '커서 누수'입니다. 한도만 올리면 결국 다시 납니다."]],
+ ["tip","장애 보고에는 '한도 상향(응급 조치)'과 'GV$OPEN_CURSOR로 확인한 누수 SQL(근본 원인, 개발팀 전달)'을 나눠 적으세요."]
+]}],
+ quiz: [
+ { q: "19c에서 OPEN_CURSORS의 기본값은?", o: ["50", "300", "1000", "65535"], a: 0, e: "기본 50, 범위 0~65535입니다. 운영계는 보통 더 크게 설정합니다." },
+ { q: "세션별로 지금 열려 있는 커서 수를 보여주는 통계 이름은?", o: ["opened cursors cumulative", "opened cursors current", "session cursor cache hits", "parse count (total)"], a: 1, e: "'opened cursors current'가 현재 열린 커서 수입니다. cumulative는 누적값입니다." },
+ { q: "같은 SQL_ID의 커서가 한 세션에 수백 개 열려 있다면 의심할 것은?", o: ["Shared Pool 부족", "애플리케이션이 커서(Statement)를 닫지 않는 누수", "통계 부족", "Undo 부족"], a: 1, e: "커서 누수입니다. OPEN_CURSORS만 올리면 다시 발생하므로 개발팀에 해당 SQL을 전달합니다." }
+]},
+/* ───── 13호선 이관 ───── */
+mig: { lessons: [
+{ id:"mig-12", title:"PDB 클론과 Refreshable PDB로 이관", min:6, ref:[["Multitenant Administrator's Guide 19c · Cloning a PDB or Non-CDB", D + "multi/cloning-a-pdb.html"], ["SQL Language Reference 19c · CREATE PLUGGABLE DATABASE", D + "sqlrf/CREATE-PLUGGABLE-DATABASE.html"], ["Multitenant Administrator's Guide 19c · Administering PDBs", D + "multi/administering-pdbs-with-sql-plus.html"], ["Database Licensing Information 19c", D + "dblic/Licensing-Information.html"]], body:[
+ ["p","다른 CDB(다른 서버)에 있는 PDB를 DB 링크로 복제해 옮기는 방법입니다. 원본이 local undo 모드면 원본을 열어 둔 채로(hot clone) 복제할 수 있습니다."],
+ ["p","**Refreshable PDB**는 한 번 복제한 뒤에도 원본의 Redo를 주기적으로 받아 따라가게 만든 클론입니다. 이관 당일에는 마지막 차이만 반영하고 전환하면 되어 다운타임이 짧아집니다."],
+ ["code","sql","-- ◎ 대상 CDB에서\n-- STEP 1. 원본 CDB로 가는 DB 링크 (원본에 CREATE PLUGGABLE DATABASE 권한 가진 공통 사용자)\nCREATE DATABASE LINK src_cdb CONNECT TO c##clone_user IDENTIFIED BY \"****\" USING 'SRCCDB';\n\n-- STEP 2. Refreshable 클론 생성 (원본은 ARCHIVELOG + local undo 모드여야 함)\nCREATE PLUGGABLE DATABASE apppdb FROM apppdb@src_cdb REFRESH MODE EVERY 60 MINUTES;\n--   MANUAL로 만들고 필요할 때 직접 REFRESH 해도 됨 (MINUTES 간격은 3000 미만)\n\n-- STEP 3. 수동 갱신 (refreshable PDB는 닫혀 있거나 READ ONLY 상태로만 유지)\nALTER SESSION SET CONTAINER = apppdb;\nALTER PLUGGABLE DATABASE CLOSE IMMEDIATE;\nALTER PLUGGABLE DATABASE REFRESH;\n\n-- STEP 4. 전환 당일: 원본 업무 중지 → 마지막 REFRESH → 갱신 해제 → 열기\nALTER PLUGGABLE DATABASE REFRESH;\nALTER PLUGGABLE DATABASE REFRESH MODE NONE;\nALTER PLUGGABLE DATABASE OPEN;"],
+ ["ul",["Refreshable PDB는 원본과 어긋나지 않도록 읽기 전용(또는 닫힌 상태)으로만 유지됩니다.","같은 CDB 안의 일반 클론: CREATE PLUGGABLE DATABASE salespdb FROM hrpdb;","19c부터 DBCA로도 원격 PDB 클론이 가능합니다.","라이선스: Multitenant 옵션이 없어도 CDB당 사용자 PDB 3개까지 만들 수 있습니다(19c 라이선스 문서). 4개 이상이면 옵션이 필요합니다."]],
+ ["tip","같은 버전·같은 RU끼리면 Refreshable PDB는 서버 교체 이관에 특히 좋습니다. 리허설에서 '마지막 REFRESH 소요 시간'을 꼭 재 두세요."]
+]}],
+ quiz: [
+ { q: "Refreshable PDB를 만들기 위한 원본 PDB의 조건은?", o: ["NOARCHIVELOG + shared undo", "ARCHIVELOG + local undo 모드", "Data Guard 구성", "TDE 필수"], a: 1, e: "매뉴얼: 원본 PDB는 ARCHIVELOG 모드이고 local undo 모드여야 합니다." },
+ { q: "Refreshable PDB를 수동으로 갱신하는 명령은?", o: ["ALTER PLUGGABLE DATABASE SYNC", "ALTER PLUGGABLE DATABASE REFRESH", "RECOVER PLUGGABLE DATABASE", "DBMS_PDB.SYNC_PDB"], a: 1, e: "PDB를 닫은 상태에서 ALTER PLUGGABLE DATABASE REFRESH로 원본의 Redo를 반영합니다." },
+ { q: "19c에서 Multitenant 옵션 없이 CDB 하나에 만들 수 있는 사용자 PDB 수는?", o: ["1개", "3개", "252개", "무제한"], a: 1, e: "19c 라이선스 문서: 옵션이 없으면 CDB당 사용자 생성 PDB 3개까지 가능합니다(EE에서 옵션이 있으면 252개)." },
+ { q: "Refreshable PDB를 일반 PDB로 바꿔 업무용으로 열기 전에 실행하는 것은?", o: ["ALTER PLUGGABLE DATABASE REFRESH MODE NONE", "DROP PLUGGABLE DATABASE", "ALTER DATABASE OPEN RESETLOGS", "noncdb_to_pdb.sql"], a: 0, e: "마지막 REFRESH 후 REFRESH MODE NONE으로 갱신을 끊어야 읽기·쓰기로 열 수 있습니다." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    (ADD[id].lessons || []).forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz || []);
+  });
+})();

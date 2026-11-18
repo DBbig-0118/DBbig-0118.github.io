@@ -102,6 +102,7 @@ window.DBBIG_GLOSSARY = [
   { k: "TTS", f: "Transportable Tablespace", g: "bk", d: "데이터파일을 통째로 옮기고 메타데이터만 Data Pump로 이관하는 방식" },
   { k: "XTTS", f: "Cross-Platform Transportable Tablespace", g: "bk", d: "엔디안이 다른 플랫폼 간 TTS. 증분 백업 반복 적용으로 다운타임 단축 (MOS 2471245.1)" },
   { k: "ZDLRA", f: "Zero Data Loss Recovery Appliance", g: "bk", d: "오라클 DB 백업 전용 어플라이언스 (incremental forever, 실시간 Redo 보호)" },
+  { k: "FSFO", f: "Fast-Start Failover", g: "bk", d: "Observer가 Primary 장애를 감지하면 브로커가 미리 정한 Standby로 자동 Failover하는 기능" },
   { k: "BMR", f: "Block Media Recovery", g: "bk", d: "손상된 블록만 골라 백업·아카이브로 복구하는 RMAN 기능 (EE)" },
   { k: "RMAN", f: "Recovery Manager", g: "bk", d: "Oracle 백업·복원·복구 도구" },
   { k: "FRA", f: "Fast Recovery Area", g: "bk", d: "백업·아카이브 로그·플래시백 로그 같은 복구 파일 전용 영역" },
