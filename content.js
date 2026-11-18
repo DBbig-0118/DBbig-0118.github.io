@@ -1012,3 +1012,307 @@ perf: [
   QZ.mig = [];
   Object.keys(QZ).forEach(function (id) { var c = cat(id); if (c && QZ[id].length) c.quiz = c.quiz.concat(QZ[id]); });
 })();
+
+/* ───────── v0.1.0 대규모 보강: 노선별 레슨 30개 + 퀴즈 (19c 공식 문서·MOS 기준) ───────── */
+(function () {
+  var D = "https://docs.oracle.com/en/database/oracle/oracle-database/19/";
+  var MOS = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=";
+  var C = window.DBBIG_CONTENT;
+  function cat(id) { return C.filter(function (c) { return c.id === id; })[0]; }
+  var ADD = {
+/* ───── 1호선 아키텍처 ───── */
+arch: { lessons: [
+{ id:"arch-17", title:"SGA 구성요소 자세히", min:5, ref:[["Database Concepts 19c · Memory Architecture", D + "cncpt/memory-architecture.html"]], body:[
+ ["tbl",[["영역","담는 것","실무 포인트"],["Buffer Cache","데이터 블록","DB_CACHE_SIZE (ASMM이면 자동 조정)"],["Shared Pool","Library Cache, Dictionary Cache, Result Cache 등","리터럴 SQL이 많으면 단편화 → ORA-04031"],["Large Pool","공유 서버의 UGA, 병렬 실행 메시지 버퍼, RMAN I/O 슬레이브 버퍼","대용량 할당을 Shared Pool과 분리"],["Java Pool","DB 안 Java 실행 메모리","OJVM 사용 여부와 관련"],["Streams Pool","Data Pump, GoldenGate Integrated 추출 등","expdp/impdp가 사용 — ASMM이면 자동"],["Redo Log Buffer","Redo 엔트리","LGWR가 파일로 씀"],["In-Memory Area (옵션)","컬럼 형식 데이터","INMEMORY_SIZE, Database In-Memory 라이선스"]]],
+ ["code","sql","-- 지금 SGA 구성\nSELECT name, ROUND(bytes/1024/1024) AS mb, resizeable FROM v$sgainfo ORDER BY bytes DESC;\n\n-- ASMM이 자동으로 늘리고 줄인 이력\nSELECT component, oper_type, ROUND(initial_size/1024/1024) init_mb,\n       ROUND(final_size/1024/1024) final_mb, start_time\nFROM   v$sga_resize_ops ORDER BY start_time DESC FETCH FIRST 20 ROWS ONLY;"],
+ ["tip","V$SGA_RESIZE_OPS에서 Shared Pool이 커지고 Buffer Cache가 줄어드는 SHRINK/GROW가 업무 시간에 계속 반복되면, 리터럴 SQL로 Shared Pool이 부풀고 있다는 신호일 수 있습니다. 이때는 SHARED_POOL_SIZE에 최소값을 걸어 두는 방법을 검토합니다."]
+]},
+{ id:"arch-18", title:"PGA와 정렬·해시 작업공간", min:5, ref:[["Database Reference 19c · PGA_AGGREGATE_LIMIT", D + "refrn/PGA_AGGREGATE_LIMIT.html"], ["Database Concepts 19c · Memory Architecture (PGA)", D + "cncpt/memory-architecture.html"]], body:[
+ ["p","PGA는 서버 프로세스마다 따로 쓰는 메모리입니다. 정렬(ORDER BY, GROUP BY), 해시 조인, 비트맵 병합 같은 '작업공간(work area)'이 여기서 돌고, 모자라면 TEMP로 넘칩니다."],
+ ["tbl",[["작업공간 실행 방식","뜻"],["optimal","PGA 안에서 끝남 — 가장 빠름"],["one-pass","TEMP에 한 번 쓰고 한 번 읽음"],["multi-pass","TEMP를 여러 번 오감 — 매우 느림, 튜닝 대상"]]],
+ ["ul",["PGA_AGGREGATE_TARGET은 '목표'일 뿐 넘을 수 있습니다.","PGA_AGGREGATE_LIMIT은 '하드 한도'입니다. 넘으면 PGA를 가장 많이 쓰는 세션의 호출이 중단되거나 세션이 종료됩니다(ORA-04036).","PGA_AGGREGATE_LIMIT 기본값은 2GB, PGA_AGGREGATE_TARGET의 200%, PROCESSES × 3MB 중 가장 큰 값입니다(RAC는 PROCESSES × 5MB 기준)."]],
+ ["code","sql","SELECT name, ROUND(value/1024/1024) AS mb FROM v$pgastat\nWHERE  name IN ('aggregate PGA target parameter','total PGA allocated','maximum PGA allocated');\nSELECT name, value FROM v$pgastat WHERE name = 'over allocation count';  -- 0보다 커지면 목표가 작다는 신호\n\n-- 작업공간이 어떤 방식으로 돌았는지 분포\nSELECT optimal_executions, onepass_executions, multipasses_executions,\n       low_optimal_size/1024 AS low_kb, (high_optimal_size+1)/1024 AS high_kb\nFROM   v$sql_workarea_histogram WHERE total_executions > 0;"],
+ ["warn","19c로 업그레이드한 뒤 갑자기 ORA-04036이 난다면, 업그레이드 전보다 PGA 사용이 늘었거나(병렬·대량 정렬) PGA_AGGREGATE_LIMIT을 명시적으로 낮게 설정해 둔 경우가 많습니다. 기본값보다 낮게 설정하지 마세요."]
+]},
+{ id:"arch-19", title:"접속 흐름: 리스너 → 서버 프로세스", min:5, ref:[["Database Concepts 19c · Process Architecture", D + "cncpt/process-architecture.html"], ["Net Services Administrator's Guide 19c", D + "netag/index.html"]], body:[
+ ["p","**STEP 1.** 클라이언트가 리스너(보통 1521 포트)로 접속 요청을 보냅니다. 요청에는 SERVICE_NAME이 들어 있습니다."],
+ ["p","**STEP 2.** 리스너는 그 서비스를 등록한 인스턴스(LREG가 등록)를 찾고, 전용 서버(dedicated) 방식이면 그 인스턴스의 서버 프로세스를 하나 만들어 연결을 넘깁니다. 이후 대화는 리스너를 거치지 않습니다."],
+ ["p","**STEP 3.** 서버 프로세스가 인증하고 세션을 만듭니다. 이때부터 SQL은 이 서버 프로세스가 처리합니다."],
+ ["code","bash","# 원격 접속으로 생긴 전용 서버 프로세스 (LOCAL=NO)\nps -ef | grep 'oracleDBBIG1 (LOCAL=NO)' | grep -v grep | wc -l\n\n# 리스너가 아는 서비스와 핸들러 상태\nlsnrctl services"],
+ ["tbl",[["방식","구조","언제"],["전용 서버 (Dedicated)","세션 1개 = 서버 프로세스 1개","기본값, 대부분의 업무"],["공유 서버 (Shared)","디스패처(Dnnn)가 받아 공유 서버(Snnn)들이 나눠 처리","접속은 많은데 대부분 놀고 있을 때"],["DRCP","DB가 서버 프로세스 풀을 유지하고 빌려줌","짧은 접속이 매우 잦은 웹 애플리케이션"]]],
+ ["tip","리스너는 연결을 '넘겨주는' 역할만 하므로, 이미 붙어 있는 세션은 리스너를 내려도 끊기지 않습니다. 리스너 재기동이 필요한 작업(sqlnet.ora 변경 등)을 할 때 고객에게 이 점을 설명하면 작업 승인이 수월합니다."]
+]},
+{ id:"arch-20", title:"파라미터 변경 범위: SCOPE·SID·정적/동적", min:5, ref:[["SQL Language Reference 19c · ALTER SYSTEM", D + "sqlrf/ALTER-SYSTEM.html"], ["Database Reference 19c · V$PARAMETER", D + "refrn/V-PARAMETER.html"]], body:[
+ ["tbl",[["SCOPE","적용"],["MEMORY","지금 메모리에만 — 재기동하면 사라짐"],["SPFILE","spfile에만 — 다음 기동부터"],["BOTH","둘 다 (spfile로 기동한 경우 기본값)"]]],
+ ["code","sql","-- 이 파라미터를 지금 바꿀 수 있나?\nSELECT name, value, issys_modifiable, isses_modifiable, isdefault\nFROM   v$parameter WHERE name IN ('processes','open_cursors','sga_target','db_recovery_file_dest_size');\n--  ISSYS_MODIFIABLE = IMMEDIATE : 바로 적용 / DEFERRED : 이후 새 세션부터 / FALSE : 정적(재기동 필요)\n\n-- 변경 전 백업은 습관처럼\nCREATE PFILE='/tmp/init_before_change.ora' FROM SPFILE;\n\n-- 정적 파라미터 (재기동 필요)\nALTER SYSTEM SET processes = 1500 SCOPE=SPFILE SID='*';\n\n-- RAC에서 한 인스턴스만 다르게\nALTER SYSTEM SET undo_tablespace = 'UNDOTBS2' SCOPE=BOTH SID='DBBIG2';\n\n-- spfile에서 항목 지우기 (기본값으로 되돌림)\nALTER SYSTEM RESET open_cursors SCOPE=SPFILE SID='*';\n\n-- spfile에 실제로 적힌 값\nSELECT sid, name, value FROM v$spparameter WHERE isspecified = 'TRUE' ORDER BY name;"],
+ ["warn","RAC에서 SID를 빼고 SCOPE=SPFILE로 바꾸면 기본값 '*'가 적용되어 모든 인스턴스에 반영됩니다. 특정 노드만 바꾸려던 것이라면 SID를 꼭 명시하세요."]
+]}],
+ quiz: [
+ { q: "Data Pump(expdp/impdp)가 사용하는 SGA 영역은?", o: ["Java Pool", "Streams Pool", "Redo Log Buffer", "Keep Pool"], a: 1, e: "Data Pump와 GoldenGate Integrated 추출은 Streams Pool을 씁니다. ASMM이면 자동으로 크기가 잡힙니다." },
+ { q: "PGA_AGGREGATE_LIMIT을 넘으면 일어나는 일은?", o: ["경고만 남는다", "PGA를 가장 많이 쓰는 세션의 호출이 중단되거나 세션이 종료된다", "인스턴스가 재기동된다", "SGA가 줄어든다"], a: 1, e: "하드 한도라서 초과 시 PGA를 많이 쓰는 세션부터 중단·종료됩니다(ORA-04036)." },
+ { q: "작업공간이 TEMP를 여러 번 오가며 처리되는 가장 느린 방식은?", o: ["optimal", "one-pass", "multi-pass", "direct-path"], a: 2, e: "multi-pass는 TEMP를 여러 번 읽고 써서 매우 느리며 튜닝 대상입니다." },
+ { q: "리스너를 재기동하면 이미 접속해 있던 전용 서버 세션은?", o: ["모두 끊긴다", "끊기지 않는다", "공유 서버로 바뀐다", "읽기 전용이 된다"], a: 1, e: "리스너는 연결을 넘겨주기만 하므로 기존 세션은 유지됩니다. 새 접속만 영향을 받습니다." },
+ { q: "V$PARAMETER.ISSYS_MODIFIABLE = FALSE인 파라미터를 바꾸려면?", o: ["SCOPE=MEMORY로 즉시 변경", "SCOPE=SPFILE로 바꾸고 재기동", "ALTER SESSION으로 변경", "변경 불가"], a: 1, e: "정적 파라미터는 spfile에 반영한 뒤 인스턴스를 재기동해야 적용됩니다." }
+]},
+/* ───── 2호선 공간관리 ───── */
+space: { lessons: [
+{ id:"space-6", title:"UNDO 운영 심화: V$UNDOSTAT 읽기", min:5, ref:[["Administrator's Guide 19c · Managing Undo", D + "admin/managing-undo.html"]], body:[
+ ["p","자동 Undo 관리에서는 오라클이 실제 쿼리 길이를 보고 보존 시간을 스스로 조정합니다(tuned undo retention). 그 결과는 V$UNDOSTAT에 10분 단위로 남습니다."],
+ ["code","sql","SELECT begin_time, end_time,\n       undoblks,                  -- 10분간 사용한 Undo 블록\n       maxquerylen,               -- 가장 오래 돈 쿼리(초)\n       tuned_undoretention,       -- 오라클이 맞춘 보존 시간(초)\n       ssolderrcnt,               -- ORA-01555 발생 건수\n       nospaceerrcnt              -- Undo 공간 부족 건수\nFROM   v$undostat\nORDER  BY begin_time DESC FETCH FIRST 24 ROWS ONLY;"],
+ ["ul",["SSOLDERRCNT가 0보다 크면 ORA-01555가 실제로 났다는 뜻입니다. 같은 구간의 MAXQUERYLEN과 TUNED_UNDORETENTION을 비교하세요.","Undo 데이터파일이 AUTOEXTEND OFF면 오라클은 '현재 크기로 가능한 최대 보존'을 목표로 합니다. AUTOEXTEND ON이면 가장 긴 쿼리를 기준으로 맞춥니다.","RETENTION GUARANTEE를 걸면 보존 기간 안의 Undo를 절대 덮어쓰지 않습니다. 대신 Undo가 모자라면 DML이 실패하므로 운영계에서는 신중히 씁니다."]],
+ ["code","sql","-- Undo 테이블스페이스 교체 (RAC는 인스턴스별)\nCREATE UNDO TABLESPACE undotbs_new DATAFILE '+DATAC1' SIZE 20G AUTOEXTEND ON MAXSIZE 32767M;\nALTER SYSTEM SET undo_tablespace = 'UNDOTBS_NEW' SCOPE=BOTH SID='DBBIG1';\n-- 옛 Undo는 ACTIVE 트랜잭션이 끝난 뒤에 DROP (DBA_ROLLBACK_SEGS 상태 확인)"]
+]},
+{ id:"space-7", title:"TEMP 관리: 추가·축소·그룹", min:4, ref:[["Administrator's Guide 19c · Managing Tablespaces", D + "admin/managing-tablespaces.html"]], body:[
+ ["code","sql","-- TEMP 파일 추가\nALTER TABLESPACE temp ADD TEMPFILE '+DATAC1' SIZE 20G AUTOEXTEND ON MAXSIZE 32767M;\n\n-- 대량 작업 후 커진 TEMP 줄이기 (사용 중인 부분은 줄지 않음)\nALTER TABLESPACE temp SHRINK SPACE KEEP 10G;\nALTER TABLESPACE temp SHRINK TEMPFILE '+DATAC1/DBBIG/TEMPFILE/temp.300.111' KEEP 5G;\n\n-- TEMP 그룹: 여러 TEMP를 묶어 세션들이 나눠 쓰게\nALTER TABLESPACE temp  TABLESPACE GROUP tgrp;\nALTER TABLESPACE temp2 TABLESPACE GROUP tgrp;\nALTER DATABASE DEFAULT TEMPORARY TABLESPACE tgrp;\nSELECT group_name, tablespace_name FROM dba_tablespace_groups;"],
+ ["ul",["TEMP 파일은 블록을 미리 포맷하지 않아 추가가 빠르지만, 파일시스템에서는 실제 공간을 나중에 차지하는(sparse) 경우가 있어 df로 보이는 여유와 다를 수 있습니다.","사용 중인 TEMP 파일은 DROP할 수 없습니다. V$TEMPSEG_USAGE로 사용 세션이 없는지 확인하고 진행합니다."]],
+ ["tip","월말 배치처럼 특정 시점에만 TEMP가 튀는 시스템은, 그 시점에 어떤 SQL이 TEMP를 썼는지 DBA_HIST_ACTIVE_SESS_HISTORY의 TEMP_SPACE_ALLOCATED로 찾아 튜닝하는 편이 TEMP를 계속 키우는 것보다 근본적입니다."]
+]},
+{ id:"space-8", title:"데이터파일 온라인 이동·이름 변경", min:4, ref:[["Administrator's Guide 19c · Managing Data Files and Temp Files", D + "admin/managing-data-files-and-temp-files.html"]], body:[
+ ["p","12c부터 ALTER DATABASE MOVE DATAFILE로 업무를 멈추지 않고 데이터파일을 옮기거나 이름을 바꿀 수 있습니다. 파일시스템 ↔ ASM, 디스크그룹 간 이동도 됩니다."],
+ ["code","sql","-- 파일 번호·위치 확인\nSELECT file_id, file_name, ROUND(bytes/1024/1024/1024,1) gb FROM dba_data_files WHERE tablespace_name = 'USERS';\n\n-- 다른 디스크그룹으로 온라인 이동\nALTER DATABASE MOVE DATAFILE '+DATAC1/DBBIG/DATAFILE/users.260.111' TO '+DATAC2';\n\n-- 파일시스템에서 이름 변경 (원본 유지하려면 KEEP)\nALTER DATABASE MOVE DATAFILE '/u02/oradata/ORCL/users01.dbf' TO '/u03/oradata/ORCL/users01.dbf';\n\n-- 진행 상황\nSELECT sid, opname, sofar, totalwork, ROUND(sofar/totalwork*100,1) pct\nFROM   v$session_longops WHERE opname LIKE 'Online data file move%' AND sofar < totalwork;"],
+ ["ul",["이동하는 동안 파일 크기만큼 대상 공간이 추가로 필요합니다.","TEMP 파일은 이 명령으로 옮기지 않습니다. 새 위치에 TEMP 파일을 추가하고 옛 파일을 지웁니다.","Data Guard Standby의 파일은 따로 옮겨야 합니다(이 명령은 실행한 DB에만 적용)."]],
+ ["tip","예전처럼 테이블스페이스를 OFFLINE → OS 복사 → RENAME → ONLINE 하던 작업을 이 명령 한 줄로 대체할 수 있어서, 스토리지 교체·디스크그룹 정리 작업의 다운타임을 크게 줄일 수 있습니다."]
+]},
+{ id:"space-9", title:"파티셔닝 기본과 관리", min:6, ref:[["VLDB and Partitioning Guide 19c", D + "vldbg/index.html"]], body:[
+ ["p","파티셔닝은 큰 테이블을 기준 컬럼 값에 따라 여러 조각(파티션)으로 나눠 저장하는 기능입니다(Enterprise Edition의 Partitioning 옵션, 별도 라이선스)."],
+ ["tbl",[["방식","나누는 기준","예"],["Range","값의 범위","주문일자 월별"],["Interval","Range + 자동 생성","새 달 데이터가 들어오면 파티션 자동 생성"],["List","값 목록","지역 코드별"],["Hash","해시값","고르게 분산 (경합 완화)"],["Composite","두 방식 조합","월별 Range + 고객 Hash"]]],
+ ["code","sql","CREATE TABLE app.orders (\n  order_id NUMBER, order_dt DATE, cust_id NUMBER, amount NUMBER\n)\nPARTITION BY RANGE (order_dt) INTERVAL (NUMTOYMINTERVAL(1,'MONTH'))\n(PARTITION p_2026_01 VALUES LESS THAN (DATE '2026-02-01'));\n\n-- 파티션별 행 수·크기\nSELECT partition_name, high_value, num_rows FROM dba_tab_partitions\nWHERE  table_owner = 'APP' AND table_name = 'ORDERS' ORDER BY partition_position;\n\n-- 오래된 파티션 정리 (전역 인덱스 유지)\nALTER TABLE app.orders DROP PARTITION p_2026_01 UPDATE GLOBAL INDEXES;"],
+ ["ul",["WHERE 조건에 파티션 키가 있으면 필요한 파티션만 읽습니다(파티션 프루닝). 실행계획의 Pstart/Pstop으로 확인합니다.","12c부터 DROP·TRUNCATE PARTITION의 UPDATE GLOBAL INDEXES는 인덱스 정리를 나중에(비동기) 처리해 빨리 끝납니다.","Interval로 자동 생성된 파티션 이름은 SYS_P로 시작합니다. 관리 편의를 위해 이름을 바꿔 두기도 합니다."]],
+ ["tip","대용량 이력 테이블의 '오래된 데이터 삭제'를 DELETE로 하면 Undo·Redo가 엄청나게 생깁니다. 월 파티션이면 DROP/TRUNCATE PARTITION 한 번으로 끝납니다. 설계 단계에서 파티션 키를 '지우는 단위'로 잡는 것이 핵심입니다."]
+]}],
+ quiz: [
+ { q: "V$UNDOSTAT에서 ORA-01555 발생 건수를 보여주는 컬럼은?", o: ["UNDOBLKS", "SSOLDERRCNT", "MAXQUERYLEN", "NOSPACEERRCNT"], a: 1, e: "SSOLDERRCNT는 snapshot too old(ORA-01555) 발생 건수입니다." },
+ { q: "Undo 테이블스페이스에 RETENTION GUARANTEE를 걸었을 때의 위험은?", o: ["ORA-01555가 늘어난다", "Undo가 모자라면 DML이 실패할 수 있다", "Redo가 사라진다", "TEMP가 커진다"], a: 1, e: "보존 기간 안의 Undo를 덮어쓰지 않으므로 공간이 부족하면 새 트랜잭션이 Undo를 얻지 못해 실패합니다." },
+ { q: "12c 이후 업무 중단 없이 데이터파일 위치를 바꾸는 명령은?", o: ["ALTER TABLESPACE ... RENAME DATAFILE", "ALTER DATABASE MOVE DATAFILE", "ALTER SYSTEM MOVE FILE", "RMAN SWITCH DATAFILE"], a: 1, e: "ALTER DATABASE MOVE DATAFILE은 온라인으로 데이터파일을 이동·이름 변경합니다." },
+ { q: "WHERE 조건으로 필요한 파티션만 읽는 것을 무엇이라 하나?", o: ["파티션 프루닝", "파티션 익스체인지", "파티션 머지", "파티션 스플릿"], a: 0, e: "파티션 프루닝입니다. 실행계획의 Pstart·Pstop 컬럼으로 확인합니다." },
+ { q: "Interval 파티셔닝의 특징은?", o: ["Hash 분산", "범위에 맞는 새 파티션이 데이터 입력 시 자동 생성", "List 값만 허용", "파티션 수 고정"], a: 1, e: "Range의 확장으로, 정의한 간격에 해당하는 새 파티션이 필요할 때 자동으로 만들어집니다." }
+]},
+/* ───── 3호선 백업·복구 ───── */
+rman: { lessons: [
+{ id:"rman-7", title:"컨트롤파일 기록 보존과 Recovery Catalog", min:5, ref:[["Database Reference 19c · CONTROL_FILE_RECORD_KEEP_TIME", D + "refrn/CONTROL_FILE_RECORD_KEEP_TIME.html"], ["Backup and Recovery User's Guide 19c", D + "bradv/index.html"]], body:[
+ ["p","RMAN은 백업 기록(메타데이터)을 기본적으로 대상 DB의 컨트롤파일에 저장합니다. 컨트롤파일의 재사용 가능한 기록은 CONTROL_FILE_RECORD_KEEP_TIME(기본 7일)이 지나면 덮어써질 수 있습니다."],
+ ["warn","보존정책이 'RECOVERY WINDOW OF 14 DAYS'인데 CONTROL_FILE_RECORD_KEEP_TIME이 7일이면, 카탈로그 없이 운영할 때 8~14일 전 백업 기록이 컨트롤파일에서 사라질 수 있습니다. KEEP_TIME은 보존 기간보다 넉넉하게(예: 보존 기간 + 7일) 잡습니다."],
+ ["code","sql","SHOW PARAMETER control_file_record_keep_time\nALTER SYSTEM SET control_file_record_keep_time = 21 SCOPE=BOTH;"],
+ ["p","**Recovery Catalog**는 백업 기록을 별도 DB에 보관하는 방식입니다. 여러 DB의 백업 이력을 한곳에서 보고, 컨트롤파일을 통째로 잃어도 기록이 남습니다."],
+ ["code","bash","# 카탈로그 DB에서 (SQL*Plus)\n#   CREATE USER rco IDENTIFIED BY \"****\" DEFAULT TABLESPACE rcat QUOTA UNLIMITED ON rcat;\n#   GRANT RECOVERY_CATALOG_OWNER TO rco;\n\nrman catalog rco@catdb\nRMAN> CREATE CATALOG;\n\n# 대상 DB 등록\nrman target / catalog rco@catdb\nRMAN> REGISTER DATABASE;\nRMAN> RESYNC CATALOG;\nRMAN> LIST INCARNATION;"],
+ ["tip","카탈로그 스키마 버전은 그 카탈로그에 붙는 RMAN 클라이언트 중 가장 높은 버전 이상이어야 합니다. 19c 클라이언트로 붙었는데 버전이 낮다는 메시지가 나오면 RMAN> UPGRADE CATALOG; 을 실행합니다."]
+]},
+{ id:"rman-8", title:"블록 손상 찾기와 블록 단위 복구", min:5, ref:[["Backup and Recovery User's Guide 19c · Performing Block Media Recovery", D + "bradv/index.html"]], body:[
+ ["p","'ORA-01578: ORACLE data block corrupted'를 만나면 파일 전체가 아니라 손상된 블록만 복구할 수 있습니다(Block Media Recovery, Enterprise Edition 기능)."],
+ ["code","rman","# STEP 1. 손상 블록 전수 확인 (파일을 만들지 않음)\nVALIDATE DATABASE;\n#   또는 특정 파일만\nVALIDATE DATAFILE 7;"],
+ ["code","sql","-- STEP 2. 손상 목록과 영향받는 객체\nSELECT file#, block#, blocks, corruption_type FROM v$database_block_corruption;\n\nSELECT e.owner, e.segment_name, e.segment_type\nFROM   dba_extents e JOIN v$database_block_corruption c\n       ON e.file_id = c.file# AND c.block# BETWEEN e.block_id AND e.block_id + e.blocks - 1;"],
+ ["code","rman","# STEP 3. 손상 블록만 복구 (백업 + 아카이브 필요, 파일은 온라인 유지)\nRECOVER CORRUPTION LIST;\n#   또는 특정 블록\nRECOVER DATAFILE 7 BLOCK 1234;"],
+ ["ul",["손상된 것이 인덱스라면 블록 복구보다 인덱스 재생성(REBUILD ONLINE 또는 DROP/CREATE)이 간단합니다.","Active Data Guard 환경에서는 Primary·Standby가 서로의 정상 블록으로 손상 블록을 자동 복구합니다.","OS 레벨에서 파일을 검사할 때는 dbv file=<파일> blocksize=8192 를 씁니다(DB 접속 불필요)."]],
+ ["tip","손상이 반복된다면 스토리지·HBA·멀티패스 같은 I/O 경로 문제일 가능성이 큽니다. 블록 복구 후에도 OS 로그와 스토리지 상태를 같이 확인하세요."]
+]},
+{ id:"rman-9", title:"RMAN DUPLICATE로 복제 DB 만들기", min:6, ref:[["Backup and Recovery User's Guide 19c · Duplicating a Database", D + "bradv/index.html"]], body:[
+ ["p","운영 DB를 그대로 복제해 테스트·개발 DB를 만들거나 Standby를 구축할 때 씁니다. 12c부터 FROM ACTIVE DATABASE 방식은 원본에서 백업셋을 만들어 네트워크로 바로 넘깁니다."],
+ ["p","◎ 복제 대상 서버 (AUX)"],
+ ["code","bash","# STEP 1. 최소 pfile 과 패스워드 파일 (원본 orapw 복사, 이름만 변경)\necho \"db_name=DUP\" > $ORACLE_HOME/dbs/initDUP.ora\nscp srcsrv:$ORACLE_HOME/dbs/orapwPROD $ORACLE_HOME/dbs/orapwDUP\n\n# STEP 2. NOMOUNT 상태에서도 원격 접속되도록 리스너에 정적 등록 (listener.ora)\n#   SID_LIST_LISTENER = (SID_LIST = (SID_DESC = (GLOBAL_DBNAME = DUP)(ORACLE_HOME = /u01/app/oracle/product/19.0.0/dbhome_1)(SID_NAME = DUP)))\nlsnrctl reload\n\nexport ORACLE_SID=DUP\nsqlplus / as sysdba <<'EOF'\nSTARTUP NOMOUNT;\nEOF"],
+ ["code","rman","# STEP 3. 원본(target)과 복제(auxiliary)에 동시에 접속해서 복제\nrman target sys@PROD auxiliary sys@DUP\n\nDUPLICATE TARGET DATABASE TO DUP\n  FROM ACTIVE DATABASE\n  USING COMPRESSED BACKUPSET\n  SPFILE\n    SET db_unique_name='DUP'\n    SET control_files='+DATAC1'\n    SET db_file_name_convert='+DATAC1/PROD','+DATAC1/DUP'\n    SET log_file_name_convert='+DATAC1/PROD','+DATAC1/DUP'\n  NOFILENAMECHECK;"],
+ ["ul",["Standby를 만들 때는 DUPLICATE TARGET DATABASE FOR STANDBY FROM ACTIVE DATABASE 를 씁니다.","복제 중 원본에 네트워크·I/O 부하가 생기므로 업무 시간을 피합니다. 채널을 늘리거나 SECTION SIZE로 큰 파일을 나눠 병렬화할 수 있습니다.","복제된 DB는 새 DBID를 받습니다(FOR STANDBY 제외)."]],
+ ["warn","NOFILENAMECHECK는 원본과 같은 경로 이름을 써도 막지 않는 옵션입니다. 같은 서버나 같은 스토리지에서 실행할 때 쓰면 원본 파일을 덮어쓸 위험이 있으니, 반드시 다른 서버·다른 경로일 때만 씁니다."]
+]}],
+ quiz: [
+ { q: "CONTROL_FILE_RECORD_KEEP_TIME의 기본값은?", o: ["1일", "7일", "14일", "31일"], a: 1, e: "기본 7일입니다. RMAN 보존 기간보다 짧으면 카탈로그 없이 운영할 때 백업 기록이 사라질 수 있습니다." },
+ { q: "RMAN VALIDATE가 찾아낸 손상 블록 목록이 기록되는 뷰는?", o: ["V$BACKUP_CORRUPTION", "V$DATABASE_BLOCK_CORRUPTION", "DBA_EXTENTS", "V$RECOVER_FILE"], a: 1, e: "VALIDATE 결과의 손상 블록은 V$DATABASE_BLOCK_CORRUPTION에 기록되고, RECOVER CORRUPTION LIST가 이 목록을 복구합니다." },
+ { q: "원본을 내리지 않고 네트워크로 바로 복제 DB를 만드는 DUPLICATE 옵션은?", o: ["FROM ACTIVE DATABASE", "UNTIL TIME", "NOOPEN", "SKIP READONLY"], a: 0, e: "FROM ACTIVE DATABASE는 백업 파일 없이 원본에서 바로 복제합니다. 12c부터 USING BACKUPSET으로 더 효율적입니다." },
+ { q: "NOMOUNT 상태의 복제 대상 인스턴스에 원격 접속하려면 필요한 것은?", o: ["리스너에 정적 등록(SID_LIST_LISTENER)", "DB Link", "TDE 키스토어", "Data Guard 브로커"], a: 0, e: "NOMOUNT에서는 LREG가 서비스를 동적 등록하지 못하므로 listener.ora에 정적 등록이 필요합니다." }
+]},
+/* ───── 4호선 RAC·Grid ───── */
+rac: { lessons: [
+{ id:"rac-8", title:"Clusterware 로그 위치와 읽는 순서", min:5, ref:[["Clusterware Administration 19c · Troubleshooting Oracle Clusterware", D + "cwadd/index.html"]], body:[
+ ["p","12.1.0.2 이후 Clusterware 로그는 ADR 구조로 바뀌었습니다. grid 계정의 ORACLE_BASE 아래에 있습니다."],
+ ["code","bash","# grid 계정, 노드별 (◎ 문제가 생긴 노드부터)\ncd $ORACLE_BASE/diag/crs/$(hostname -s)/crs/trace\n\nless alert.log          # CRS 알림 로그 — 가장 먼저\nless ocssd.trc          # 노드 멤버십·heartbeat·Eviction\nless crsd.trc           # 리소스 기동·정지\nless ohasd.trc          # 하위 스택 기동 문제\nls -lt *oraagent*.trc   # 리소스별 에이전트 (DB·리스너 기동 실패 원인)"],
+ ["tbl",[["메시지","뜻"],["CRS-1612 / 1611 / 1610","노드 간 네트워크 heartbeat가 misscount의 50% / 75% / 90% 동안 끊김 — Eviction 직전 경고"],["CRS-1606","Voting Disk 접근 문제"],["CRS-1607","노드가 클러스터에서 축출(Evicted)됨"]]],
+ ["code","bash","# CSS 타임아웃 값\n/u01/app/19.0.0/grid/bin/crsctl get css misscount     # 네트워크 heartbeat 허용 시간(초)\n/u01/app/19.0.0/grid/bin/crsctl get css disktimeout   # Voting Disk 허용 시간(초)\n\n# 장애 시점 진단 자료 한 번에 수집 (AHF)\ntfactl diagcollect -last 2h"],
+ ["tip","Eviction 원인 분석 순서: ① 축출된 노드의 ocssd.trc에서 '마지막으로 무엇을 못 받았나' → ② 살아남은 노드의 ocssd.trc → ③ 그 시점 OSWatcher(CPU·메모리·네트워크) → ④ /var/log/messages. 시간대(UTC/KST)를 맞춰 보는 것이 중요합니다."]
+]},
+{ id:"rac-9", title:"TAF·FAN·Application Continuity", min:5, ref:[["RAC Administration 19c · Workload Management with Dynamic Database Services", D + "racad/index.html"]], body:[
+ ["p","인스턴스가 죽었을 때 애플리케이션이 얼마나 '티 안 나게' 넘어가는지는 서비스 설정과 드라이버에 달려 있습니다."],
+ ["tbl",[["기술","하는 일","조건"],["TAF","끊기면 다른 인스턴스로 다시 접속하고, 진행 중이던 SELECT를 이어서 읽음","OCI 기반 클라이언트, DML은 재실행 안 됨"],["FAN","인스턴스·서비스 상태 변화를 ONS 이벤트로 즉시 알려 줌 — 커넥션 풀이 죽은 연결을 바로 버림","풀(UCP 등)이 FAN을 구독해야 함"],["Application Continuity (AC)","진행 중이던 트랜잭션을 다른 인스턴스에서 재실행(replay)","JDBC replay 드라이버·OCI 등, 서비스 FAILOVER_TYPE=TRANSACTION"],["TAC (19c)","AC를 애플리케이션 수정 없이 자동으로","FAILOVER_TYPE=AUTO"]]],
+ ["code","bash","# oracle 계정 — 서비스에 AC 설정 예\nsrvctl modify service -db DBBIG -service OLTP_SVC \\\n  -failovertype TRANSACTION -commit_outcome TRUE \\\n  -failoverretry 30 -failoverdelay 10 -replay_init_time 600\n\nsrvctl config service -db DBBIG -service OLTP_SVC"],
+ ["tip","장애 테스트에서 '서비스는 넘어갔는데 애플리케이션은 몇 분간 에러'가 나면, 대부분 FAN을 받지 못해 커넥션 풀이 죽은 연결을 계속 쓰는 경우입니다. 드라이버·풀 설정(ONS 포트 6200 방화벽 포함)을 먼저 확인하세요."]
+]}],
+ quiz: [
+ { q: "19c Clusterware 알림 로그(alert.log)의 위치는?", o: ["$GRID_HOME/log/<host>/alert<host>.log", "$ORACLE_BASE/diag/crs/<host>/crs/trace/alert.log", "/var/log/crs.log", "$ORACLE_HOME/rdbms/log"], a: 1, e: "12.1.0.2 이후 ADR 구조로 grid 계정의 ORACLE_BASE/diag/crs/<호스트>/crs/trace 아래에 있습니다." },
+ { q: "노드 Eviction의 직접 원인을 볼 때 가장 먼저 확인할 트레이스는?", o: ["crsd.trc", "ocssd.trc", "evmd.trc", "listener.log"], a: 1, e: "노드 멤버십과 heartbeat는 CSS(ocssd)가 관리하므로 ocssd.trc가 핵심입니다." },
+ { q: "CRS-1610 메시지가 뜻하는 것은?", o: ["네트워크 heartbeat가 misscount의 90% 동안 끊김", "Voting Disk 추가", "리소스 정상 기동", "OCR 백업 완료"], a: 0, e: "1612(50%) → 1611(75%) → 1610(90%) 순으로 Eviction에 가까워짐을 경고합니다." },
+ { q: "진행 중이던 트랜잭션까지 다른 인스턴스에서 재실행해 주는 기술은?", o: ["TAF", "FAN", "Application Continuity", "SCAN"], a: 2, e: "TAF는 SELECT만 이어 주고, AC는 트랜잭션을 replay합니다. 19c TAC는 이를 자동화합니다." }
+]},
+/* ───── 5호선 ASM ───── */
+asm: { lessons: [
+{ id:"asm-6", title:"ASM 디스크 장치 관리: udev·ASMLib·AFD", min:5, ref:[["ASM Administrator's Guide 19c", D + "ostmg/index.html"]], body:[
+ ["p","ASM이 쓸 디스크는 재부팅 후에도 같은 이름·같은 권한(grid:asmadmin, 0660)으로 보여야 합니다. 방법은 세 가지입니다."],
+ ["tbl",[["방법","특징"],["udev 규칙","OS 기본 기능. 디스크 고유 ID(WWID 등)로 이름·권한 고정. 추가 패키지 불필요"],["ASMLib (oracleasm)","oracleasm createdisk로 라벨을 붙여 관리. Linux 버전에 맞는 ASMLib 버전 확인 필요"],["AFD (ASM Filter Driver)","라벨 관리 + 오라클 외 프로그램의 쓰기를 막아(필터링) 실수로 덮어쓰는 사고 방지. 커널 버전 지원 여부 확인 필요"]]],
+ ["code","bash","# udev 예 (root) — /etc/udev/rules.d/99-oracle-asmdevices.rules\n#  KERNEL==\"sd*\", ENV{ID_SERIAL}==\"36000c29xxxxxxxx\", SYMLINK+=\"oracleasm/DATA01\", OWNER=\"grid\", GROUP=\"asmadmin\", MODE=\"0660\"\nudevadm control --reload-rules && udevadm trigger\nls -l /dev/oracleasm/\n\n# ASMLib\noracleasm createdisk DATA01 /dev/sdc1\noracleasm listdisks\n\n# AFD (grid 계정)\nasmcmd afd_state\nasmcmd afd_lsdsk"],
+ ["warn","멀티패스 환경에서는 개별 경로 장치(/dev/sdX)가 아니라 멀티패스 장치(/dev/mapper/...)에 규칙을 걸어야 합니다. 경로 하나가 끊기면 디스크가 사라진 것처럼 보이는 장애가 납니다."]
+]},
+{ id:"asm-7", title:"ACFS 기본", min:4, ref:[["ASM Administrator's Guide 19c · Oracle ACFS", D + "ostmg/index.html"], ["MOS 1369107.1 · ACFS Support On OS Platforms", MOS + "1369107.1"]], body:[
+ ["p","ACFS는 ASM 디스크그룹 위에 만드는 범용 클러스터 파일시스템입니다. 모든 노드에서 같은 경로로 보이므로 공유 파일(GoldenGate trail, 배치 입출력 파일, 공용 스크립트)에 씁니다."],
+ ["code","bash","# grid 계정 — STEP 1. ADVM 볼륨 생성\nasmcmd volcreate -G DATAC1 -s 100G acfsvol1\nasmcmd volinfo -G DATAC1 acfsvol1          # Volume Device: /dev/asm/acfsvol1-123 확인\n\n# root — STEP 2. 파일시스템 생성·클러스터 리소스 등록·마운트\nmkfs -t acfs /dev/asm/acfsvol1-123\nmkdir -p /acfs/share\n/u01/app/19.0.0/grid/bin/srvctl add filesystem -device /dev/asm/acfsvol1-123 -path /acfs/share -user oracle\n/u01/app/19.0.0/grid/bin/srvctl start filesystem -device /dev/asm/acfsvol1-123\n\n# 확인·확장\n/sbin/acfsutil info fs /acfs/share\n/sbin/acfsutil size +50G /acfs/share"],
+ ["tip","ACFS는 커널 모듈이라 OS 커널을 올리면 그 커널을 지원하는 GI RU가 필요할 수 있습니다. OS 패치 전에 MOS 1369107.1(ACFS 지원 매트릭스)을 확인하는 것을 체크리스트에 넣으세요."]
+]}],
+ quiz: [
+ { q: "오라클 외 프로그램이 ASM 디스크에 쓰는 것을 막아 주는 장치 관리 방식은?", o: ["udev", "ASMLib", "AFD (ASM Filter Driver)", "LVM"], a: 2, e: "AFD는 라벨 관리와 함께 비(非)오라클 I/O를 필터링해 실수로 덮어쓰는 사고를 막습니다." },
+ { q: "ASM 디스크로 쓸 장치의 권장 소유자·권한은?", o: ["root:root 0644", "grid:asmadmin 0660", "oracle:dba 0777", "grid:oinstall 0600"], a: 1, e: "일반적으로 grid:asmadmin, 0660으로 ASM 인스턴스가 읽고 쓸 수 있게 합니다(환경에 따라 그룹 구성은 다를 수 있음)." },
+ { q: "ACFS 볼륨을 만드는 asmcmd 명령은?", o: ["asmcmd mkdg", "asmcmd volcreate", "asmcmd cp", "asmcmd lsdsk"], a: 1, e: "asmcmd volcreate로 ADVM 볼륨을 만들고, mkfs -t acfs로 파일시스템을 만듭니다." }
+]},
+/* ───── 6호선 패치 ───── */
+patch: { lessons: [
+{ id:"patch-8", title:"패치 후 점검과 롤백 판단", min:5, ref:[["Database Patch Maintenance 19c", D + "dbptc/index.html"]], body:[
+ ["p","◎ 모든 노드에서 같은 점검을 하고 결과를 작업 기록에 남깁니다."],
+ ["code","bash","# STEP 1. 바이너리 패치 상태 (grid, oracle 각 홈)\n/u01/app/19.0.0/grid/OPatch/opatch lspatches\n/u01/app/oracle/product/19.0.0/dbhome_1/OPatch/opatch lspatches\n\n# STEP 2. 클러스터 패치 레벨이 노드 간 일치하는지\n/u01/app/19.0.0/grid/bin/crsctl query crs activeversion -f\n/u01/app/19.0.0/grid/bin/crsctl query crs softwarepatch\n\n# STEP 3. 리소스 상태\n/u01/app/19.0.0/grid/bin/crsctl stat res -t"],
+ ["code","sql","-- STEP 4. SQL 패치 적용 결과 (PDB 포함)\nSELECT con_id, patch_id, action, status, action_time FROM cdb_registry_sqlpatch ORDER BY action_time DESC;\n\n-- STEP 5. 패치 전과 비교할 INVALID 객체\nSELECT owner, object_type, COUNT(*) FROM dba_objects WHERE status = 'INVALID' GROUP BY owner, object_type;\n\n-- STEP 6. 컴포넌트 상태\nSELECT comp_id, version_full, status FROM dba_registry ORDER BY comp_id;"],
+ ["ul",["alert 로그(DB·ASM·CRS)에서 작업 시간 이후 ORA-·CRS- 에러가 없는지 확인합니다.","애플리케이션 담당자에게 서비스 접속·주요 화면 확인을 요청하고, 확인 시각을 기록합니다.","롤백 판단 기준을 미리 정해 둡니다: 예) 인스턴스 기동 실패, datapatch 재실행해도 실패, 핵심 서비스 미기동 30분 지속."]],
+ ["tip","패치 전후로 같은 점검 SQL을 그대로 돌려 결과를 나란히 붙여 두면, 고객 보고서와 다음 작업 계획서에 그대로 재사용할 수 있습니다."]
+]},
+{ id:"patch-9", title:"OJVM 패치 이해", min:4, ref:[["MOS 1929745.1 · Oracle Recommended Patches — Oracle JavaVM Component", MOS + "1929745.1"], ["MOS 2217053.1 · RAC Rolling Install Process for the Oracle JavaVM RU", MOS + "2217053.1"]], body:[
+ ["p","OJVM(Oracle JavaVM) 패치는 DB 안의 Java 엔진 보안 패치로, 분기마다 DB RU와 함께 나옵니다. RU와 OJVM을 한 번에 받을 수 있는 'Combo' 패치도 제공됩니다."],
+ ["ul",["RU는 RAC 롤링 적용이 되지만, OJVM은 README의 'RAC Rolling Installable' 항목과 MOS 2217053.1을 반드시 확인해야 합니다. 조건에 따라 DB 다운타임 계획이 필요할 수 있습니다.","OJVM도 바이너리 적용(opatch apply) 후 datapatch로 SQL 부분을 반영합니다.","DB에 JAVAVM 컴포넌트가 설치되어 있는지 확인하고 계획을 세웁니다."]],
+ ["code","sql","SELECT comp_id, comp_name, version_full, status FROM dba_registry WHERE comp_id IN ('JAVAVM','CATJAVA','XML');\nSELECT patch_id, description, status FROM dba_registry_sqlpatch WHERE description LIKE '%JAVAVM%' OR description LIKE '%OJVM%';"],
+ ["tip","보안 진단에서 'OJVM 패치 미적용'이 지적되는 경우가 많습니다. 작업계획서에는 RU와 OJVM을 각각 적었는지, 다운타임이 필요한지 따로 표시하세요."]
+]}],
+ quiz: [
+ { q: "클러스터 전체의 GI 패치 레벨 상태를 확인하는 명령은?", o: ["crsctl query crs activeversion -f", "srvctl status database", "olsnodes -n", "lsnrctl status"], a: 0, e: "activeversion -f는 활성 버전과 패치 레벨(rolling patch 상태 포함)을 보여줍니다." },
+ { q: "CDB의 모든 PDB에 SQL 패치가 반영됐는지 볼 뷰는?", o: ["DBA_REGISTRY_SQLPATCH", "CDB_REGISTRY_SQLPATCH", "V$PATCHES", "DBA_PATCH_HISTORY"], a: 1, e: "CDB_ 뷰는 CON_ID별로 모든 컨테이너의 결과를 보여줍니다." },
+ { q: "OJVM 패치를 RAC에 적용할 때 꼭 확인할 것은?", o: ["README의 RAC Rolling Installable 항목과 관련 MOS 문서", "SGA 크기", "TEMP 크기", "리스너 포트"], a: 0, e: "OJVM은 RU와 롤링 적용 조건이 달라 다운타임 계획이 필요할 수 있습니다." }
+]},
+/* ───── 7호선 성능튜닝 ───── */
+perf: { lessons: [
+{ id:"perf-8", title:"SQL Monitor로 오래 걸리는 SQL 보기", min:5, ref:[["SQL Tuning Guide 19c · Monitoring Database Operations", D + "tgsql/index.html"]], body:[
+ ["p","SQL Monitor는 실행 중인 SQL이 실행계획의 어느 단계에서 시간을 쓰고 있는지 실시간으로 보여줍니다. 병렬 SQL이거나, 한 번 실행에 CPU·I/O 시간이 5초를 넘으면 자동으로 모니터링됩니다(Tuning Pack 라이선스)."],
+ ["code","sql","-- 지금·최근 모니터링된 SQL\nSELECT sql_id, status, username, ROUND(elapsed_time/1e6) AS sec, sql_text\nFROM   v$sql_monitor ORDER BY sql_exec_start DESC FETCH FIRST 20 ROWS ONLY;\n\n-- 텍스트 리포트\nSET LONG 1000000 LONGCHUNKSIZE 1000000 LINESIZE 250 PAGESIZE 0\nSELECT DBMS_SQLTUNE.REPORT_SQL_MONITOR(sql_id => '&sql_id', type => 'TEXT') FROM dual;\n\n-- 5초가 안 되는 SQL도 강제로 보려면 힌트\nSELECT /*+ MONITOR */ COUNT(*) FROM app.orders WHERE order_dt >= SYSDATE - 30;"],
+ ["ul",["리포트의 Activity(%) 컬럼이 큰 줄이 실제로 시간을 쓴 단계입니다.","Estimated Rows와 Actual Rows의 차이가 크면 통계·카디널리티 문제를 의심합니다.","type => 'ACTIVE'로 받은 HTML은 브라우저에서 그래프로 보여서 SR 첨부에도 좋습니다."]],
+ ["tip","\"지금 이 배치가 어디까지 왔나요?\"라는 질문에는 SQL Monitor 리포트의 진행 상황(Progress)이 가장 정확한 답입니다."]
+]},
+{ id:"perf-9", title:"바인드 변수·하드 파싱·커서 공유", min:5, ref:[["SQL Tuning Guide 19c · Improving Real-World Performance Through Cursor Sharing", D + "tgsql/index.html"], ["Database Reference 19c · CURSOR_SHARING", D + "refrn/CURSOR_SHARING.html"]], body:[
+ ["p","값만 다른 SQL을 리터럴로 계속 보내면(WHERE id = 101, WHERE id = 102 …) 매번 하드 파싱이 일어나 CPU와 Shared Pool을 낭비합니다. 바인드 변수(WHERE id = :1)를 쓰면 실행계획을 재사용합니다."],
+ ["code","sql","-- 리터럴만 다르고 모양이 같은 SQL 찾기 (FORCE_MATCHING_SIGNATURE가 같음)\nSELECT force_matching_signature, COUNT(*) AS cnt, MIN(sql_id) AS sample_sql_id\nFROM   v$sql\nWHERE  force_matching_signature > 0\nGROUP  BY force_matching_signature\nHAVING COUNT(*) > 50\nORDER  BY cnt DESC FETCH FIRST 10 ROWS ONLY;\n\n-- 하드 파싱 추세\nSELECT name, value FROM v$sysstat WHERE name IN ('parse count (total)','parse count (hard)','execute count');"],
+ ["ul",["CURSOR_SHARING 기본값은 EXACT입니다. FORCE로 바꾸면 리터럴을 시스템이 바인드로 바꿔 주지만, 실행계획이 바뀔 수 있어 응급 처치로만 신중히 씁니다.","바인드 값에 따라 좋은 계획이 다른 경우(데이터 쏠림), 11g부터 적응형 커서 공유가 값에 맞는 계획을 따로 만듭니다(V$SQL의 IS_BIND_SENSITIVE·IS_BIND_AWARE)."]],
+ ["tip","ORA-04031과 'library cache' 계열 대기가 같이 보이면 위 쿼리로 리터럴 SQL부터 찾아 애플리케이션 팀에 전달하세요. DB 파라미터로 버티는 것보다 근본적인 해결입니다."]
+]},
+{ id:"perf-10", title:"실행계획의 액세스 경로 읽기", min:5, ref:[["SQL Tuning Guide 19c · Optimizer Access Paths", D + "tgsql/optimizer-access-paths.html"]], body:[
+ ["tbl",[["액세스 경로","언제","메모"],["TABLE ACCESS FULL","대부분의 행을 읽거나 적절한 인덱스가 없을 때","큰 테이블은 direct path read로 버퍼 캐시를 거치지 않을 수 있음 (Exadata는 STORAGE FULL → Smart Scan)"],["INDEX UNIQUE SCAN","PK·유니크 키로 한 건","가장 효율적"],["INDEX RANGE SCAN","범위·비유니크 조건","정렬된 순서로 읽음"],["INDEX FULL SCAN","인덱스 전체를 순서대로","ORDER BY를 대신할 때"],["INDEX FAST FULL SCAN","인덱스 전체를 멀티블록으로","필요한 컬럼이 모두 인덱스에 있을 때"],["INDEX SKIP SCAN","선두 컬럼 조건 없이 다음 컬럼으로","선두 컬럼 값 종류가 적을 때만 유리"]]],
+ ["p","인덱스로 읽어도 느린 대표 원인은 **클러스터링 팩터**입니다. 인덱스 순서와 테이블 행의 물리적 순서가 뒤죽박죽이면, 인덱스로 찾은 행마다 다른 테이블 블록을 읽게 됩니다."],
+ ["code","sql","SELECT i.index_name, i.clustering_factor, t.blocks, t.num_rows\nFROM   dba_indexes i JOIN dba_tables t ON t.owner = i.table_owner AND t.table_name = i.table_name\nWHERE  i.table_owner = 'APP' AND i.table_name = 'ORDERS';\n-- clustering_factor가 blocks에 가까우면 좋음, num_rows에 가까우면 나쁨"],
+ ["tip","\"인덱스를 만들었는데 옵티마이저가 안 탄다\"면 무조건 힌트를 넣기 전에, 조건절 컬럼에 함수·형변환이 걸려 있지 않은지(WHERE TO_CHAR(order_dt,...) = ... 같은)부터 확인하세요."]
+]}],
+ quiz: [
+ { q: "SQL Monitor가 자동으로 모니터링하는 조건은?", o: ["모든 SQL", "병렬 실행이거나 한 번 실행의 CPU·I/O 시간이 5초 이상", "DDL만", "SYS 사용자 SQL만"], a: 1, e: "병렬 SQL 또는 5초 이상 CPU·I/O를 쓴 실행이 자동 대상입니다. MONITOR 힌트로 강제할 수 있습니다." },
+ { q: "리터럴만 다르고 모양이 같은 SQL을 묶어 찾을 때 쓰는 V$SQL 컬럼은?", o: ["SQL_ID", "PLAN_HASH_VALUE", "FORCE_MATCHING_SIGNATURE", "CHILD_NUMBER"], a: 2, e: "FORCE_MATCHING_SIGNATURE는 리터럴을 바인드로 바꿨다고 가정했을 때 같은 SQL이면 같은 값입니다." },
+ { q: "CURSOR_SHARING의 기본값은?", o: ["FORCE", "SIMILAR", "EXACT", "AUTO"], a: 2, e: "기본은 EXACT입니다. SIMILAR는 deprecated되었습니다." },
+ { q: "인덱스 순서와 테이블 행의 물리적 순서가 얼마나 비슷한지 나타내는 값은?", o: ["BLEVEL", "CLUSTERING_FACTOR", "DISTINCT_KEYS", "LEAF_BLOCKS"], a: 1, e: "CLUSTERING_FACTOR가 테이블 블록 수에 가까우면 좋고, 행 수에 가까우면 인덱스 경유 읽기가 비쌉니다." }
+]},
+/* ───── 8호선 보안·계정 ───── */
+sec: { lessons: [
+{ id:"sec-6", title:"TDE 기본: 키스토어와 테이블스페이스 암호화", min:6, ref:[["Advanced Security Guide 19c · Transparent Data Encryption", D + "asoag/index.html"]], body:[
+ ["p","TDE(Transparent Data Encryption)는 디스크에 저장되는 데이터를 암호화합니다. 애플리케이션은 바꿀 필요가 없습니다. Advanced Security 옵션 라이선스가 필요합니다."],
+ ["code","sql","-- STEP 1. 키스토어 위치 지정 (19c 권장 방식, 정적 파라미터 → 재기동)\nALTER SYSTEM SET wallet_root = '/u01/app/oracle/admin/DBBIG/wallet' SCOPE=SPFILE SID='*';\n-- 재기동 후\nALTER SYSTEM SET tde_configuration = 'KEYSTORE_CONFIGURATION=FILE' SCOPE=BOTH SID='*';\n\n-- STEP 2. 키스토어 생성·열기·마스터 키 설정 (CDB 루트에서)\nADMINISTER KEY MANAGEMENT CREATE KEYSTORE IDENTIFIED BY \"****\";\nADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY \"****\" CONTAINER=ALL;\nADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY \"****\" WITH BACKUP CONTAINER=ALL;\n\n-- STEP 3. 재기동 때 자동으로 열리게 (auto-login)\nADMINISTER KEY MANAGEMENT CREATE AUTO_LOGIN KEYSTORE FROM KEYSTORE IDENTIFIED BY \"****\";\n\n-- STEP 4. 암호화 테이블스페이스\nCREATE TABLESPACE secure_ts DATAFILE '+DATAC1' SIZE 10G ENCRYPTION USING 'AES256' ENCRYPT;\n-- 기존 테이블스페이스를 온라인으로 암호화 (12.2+, 임시로 추가 공간 필요)\nALTER TABLESPACE users ENCRYPTION ONLINE USING 'AES256' ENCRYPT;\n\nSELECT con_id, wrl_type, status, wallet_type FROM v$encryption_wallet;\nSELECT ts#, encryptionalg, status FROM v$encrypted_tablespaces;"],
+ ["warn","키스토어(wallet)를 잃어버리면 암호화된 데이터는 영영 읽을 수 없습니다. 키를 바꿀 때마다(WITH BACKUP) 키스토어를 별도 안전한 곳에 백업하고, RAC는 모든 노드가 같은 키스토어를 보도록(공유 경로 또는 복사) 구성합니다."],
+ ["tip","Exadata에서는 TDE로 암호화된 데이터도 셀에서 복호화해 Smart Scan을 처리하므로, 암호화 때문에 오프로드 이점을 잃지 않습니다."]
+]},
+{ id:"sec-7", title:"비밀번호 검증 함수와 계정 잠금 대응", min:5, ref:[["Security Guide 19c · Managing Passwords", D + "dbseg/index.html"]], body:[
+ ["code","sql","-- 오라클 제공 검증 함수 만들기 (ORA12C_VERIFY_FUNCTION 등 생성)\n@?/rdbms/admin/utlpwdmg.sql\n\n-- 프로파일에 적용\nALTER PROFILE app_profile LIMIT PASSWORD_VERIFY_FUNCTION ora12c_verify_function;\n\n-- 잠긴 계정과 잠긴 시각\nSELECT username, account_status, lock_date, profile FROM dba_users WHERE account_status LIKE '%LOCKED%';\n\n-- 누가 틀린 비밀번호로 시도했나 (Unified Auditing, ORA-01017)\nSELECT event_timestamp, dbusername, userhost, os_username, return_code\nFROM   unified_audit_trail\nWHERE  action_name = 'LOGON' AND return_code = 1017\nORDER  BY event_timestamp DESC FETCH FIRST 20 ROWS ONLY;\n\nALTER USER app_user ACCOUNT UNLOCK;"],
+ ["ul",["계정이 반복해서 잠기면 '옛 비밀번호로 계속 접속을 시도하는 서버'가 있는 경우가 대부분입니다. 감사 기록의 USERHOST와 리스너 로그로 출발지를 찾습니다.","19c(19.12 RU 이후)에는 PASSWORD_ROLLOVER_TIME으로 일정 기간 옛 비밀번호와 새 비밀번호를 함께 허용하는 점진적 교체 기능이 있습니다. 여러 애플리케이션 서버의 비밀번호를 순차적으로 바꿀 때 유용합니다."]],
+ ["tip","잠금 해제만 하고 원인을 그대로 두면 몇 분 뒤 다시 잠깁니다. 해제 전에 출발지 IP를 먼저 찾아 담당자에게 알리는 순서로 대응하세요."]
+]}],
+ quiz: [
+ { q: "19c에서 TDE 키스토어 위치를 지정하는 권장 파라미터는?", o: ["ENCRYPTION_WALLET_LOCATION (sqlnet.ora)", "WALLET_ROOT", "DB_CREATE_FILE_DEST", "AUDIT_FILE_DEST"], a: 1, e: "19c는 WALLET_ROOT와 TDE_CONFIGURATION 사용을 권장합니다. sqlnet.ora의 ENCRYPTION_WALLET_LOCATION은 deprecated입니다." },
+ { q: "TDE 키스토어를 잃어버리면?", o: ["DB를 재기동하면 새로 만들어진다", "암호화된 데이터를 읽을 수 없게 된다", "RMAN으로 키를 되살릴 수 있다", "아무 영향 없다"], a: 1, e: "마스터 키가 없으면 복호화가 불가능합니다. 키 변경 시마다 키스토어를 백업해야 합니다." },
+ { q: "틀린 비밀번호 로그인 실패를 뜻하는 에러 코드는?", o: ["ORA-28000", "ORA-01017", "ORA-28001", "ORA-01045"], a: 1, e: "ORA-01017은 invalid username/password입니다. ORA-28000은 계정 잠김, ORA-28001은 비밀번호 만료입니다." },
+ { q: "오라클 제공 비밀번호 검증 함수를 만드는 스크립트는?", o: ["utlrp.sql", "utlpwdmg.sql", "catalog.sql", "dbmsstat.sql"], a: 1, e: "?/rdbms/admin/utlpwdmg.sql을 실행하면 ORA12C_VERIFY_FUNCTION 등이 생성됩니다." }
+]},
+/* ───── 9호선 Data Guard ───── */
+dg: { lessons: [
+{ id:"dg-6", title:"Snapshot Standby로 테스트하기", min:5, ref:[["Data Guard Concepts and Administration 19c · Managing a Snapshot Standby", D + "sbydb/index.html"]], body:[
+ ["p","Snapshot Standby는 Physical Standby를 잠시 '읽기·쓰기 가능한 테스트 DB'로 바꾸는 기능입니다. 테스트가 끝나면 변경을 모두 버리고 다시 Standby로 돌아갑니다. 내부적으로 보장 복원 지점을 쓰므로 FRA가 필요합니다."],
+ ["code","sql","-- Standby에서 (MRP 중지, MOUNT 상태)\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;\nALTER DATABASE CONVERT TO SNAPSHOT STANDBY;\nALTER DATABASE OPEN;\nSELECT database_role, open_mode FROM v$database;   -- SNAPSHOT STANDBY / READ WRITE\n\n-- (패치 검증·애플리케이션 테스트 수행)\n\n-- 원래대로\nSHUTDOWN IMMEDIATE;\nSTARTUP MOUNT;\nALTER DATABASE CONVERT TO PHYSICAL STANDBY;\n-- 재기동 후 MRP 시작\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT;"],
+ ["code","bash","# 브로커를 쓰면 한 줄\ndgmgrl sys@DBBIG\nDGMGRL> CONVERT DATABASE 'DBBIG_STBY' TO SNAPSHOT STANDBY;\nDGMGRL> CONVERT DATABASE 'DBBIG_STBY' TO PHYSICAL STANDBY;"],
+ ["warn","Snapshot Standby 동안에도 Primary의 Redo는 계속 받지만 적용하지 않습니다. 그 사이 Primary 장애가 나면 쌓인 Redo를 다 적용해야 해서 Failover가 오래 걸립니다. 테스트 시간을 짧게 잡으세요."]
+]},
+{ id:"dg-7", title:"Active Data Guard 활용", min:4, ref:[["Data Guard Concepts and Administration 19c", D + "sbydb/index.html"]], body:[
+ ["p","Active Data Guard(별도 라이선스)는 Standby를 읽기 전용으로 열어 둔 채 Redo를 계속 적용합니다. 조회·리포트 업무를 Standby로 돌려 Primary 부하를 줄입니다."],
+ ["code","sql","-- Standby에서\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;\nALTER DATABASE OPEN READ ONLY;\nALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT;\nSELECT open_mode FROM v$database;   -- READ ONLY WITH APPLY"],
+ ["ul",["Primary·Standby 중 한쪽에서 손상 블록을 읽으면, 다른 쪽의 정상 블록으로 자동 복구합니다(Automatic Block Media Recovery).","19c부터 ADG_REDIRECT_DML을 켜면 Standby에 들어온 가끔의 DML을 Primary로 넘겨 처리할 수 있습니다.","Standby에서 Block Change Tracking을 켜고 증분 백업을 받아 Primary 백업 부하를 덜 수 있습니다."]],
+ ["warn","Standby를 READ ONLY로 연 상태에서 Redo 적용(MRP)을 돌리는 것 자체가 Active Data Guard 사용입니다. 라이선스가 없으면 Standby는 MOUNT 상태로만 적용해야 합니다."]
+]}],
+ quiz: [
+ { q: "Snapshot Standby를 Physical Standby로 되돌리면 테스트 중 변경은?", o: ["Primary로 전송된다", "모두 버려진다", "아카이브로 남는다", "PDB로 보관된다"], a: 1, e: "내부 보장 복원 지점으로 되감은 뒤 Standby로 돌아가므로 테스트 중 변경은 모두 버려집니다." },
+ { q: "Active Data Guard 사용 중인 Standby의 OPEN_MODE는?", o: ["MOUNTED", "READ WRITE", "READ ONLY WITH APPLY", "MIGRATE"], a: 2, e: "읽기 전용으로 열린 채 Redo를 적용하면 READ ONLY WITH APPLY로 표시됩니다." },
+ { q: "Snapshot Standby 기간이 길어질 때의 위험은?", o: ["Primary 성능 저하", "Primary 장애 시 Failover 시간이 길어짐", "Redo 전송 중단", "아카이브 모드 해제"], a: 1, e: "Redo를 받기만 하고 적용하지 않으므로, Failover 시 쌓인 Redo를 모두 적용해야 합니다." }
+]},
+/* ───── 10호선 Exadata ───── */
+exa: { lessons: [
+{ id:"exa-5", title:"EXAchk로 헬스체크", min:4, ref:[["MOS 2550798.1 · Autonomous Health Framework (AHF) — TFA·ORAchk/EXAchk", MOS + "2550798.1"]], body:[
+ ["p","EXAchk는 Exadata 전체(DB 서버·셀·스위치·GI·DB 설정)를 오라클 모범 사례와 비교해 점검하는 도구로, AHF에 포함되어 있습니다. 패치·변경 작업 전후에 돌리는 것이 표준입니다."],
+ ["code","bash","# root, 1번 DB 서버에서 (AHF 설치 경로 예)\n/opt/oracle.ahf/bin/exachk -h          # 옵션 확인\n/opt/oracle.ahf/bin/exachk             # 전체 점검 (시간이 걸림)\n\n# 결과: 출력 디렉터리의 zip 안 HTML 리포트\n#  - Health Score, FAIL / WARNING / INFO 항목, 권고 조치와 MOS 문서 번호"],
+ ["ul",["FAIL 항목부터 확인하고, 이미 알고 있는 예외(고객 정책)는 사유를 기록해 둡니다.","패치 전 결과와 패치 후 결과를 비교하면 작업으로 새로 생긴 문제를 빨리 찾을 수 있습니다.","AHF 자체도 주기적으로 최신 버전으로 업데이트해야 점검 항목이 최신화됩니다."]],
+ ["tip","고객 정기 점검 보고서에 EXAchk Health Score 추이를 분기별로 넣으면 '관리가 잘 되고 있다'는 근거를 숫자로 보여줄 수 있습니다."]
+]},
+{ id:"exa-6", title:"Flash Cache·Flash Log·IORM 상태 확인", min:4, ref:[["Exadata System Software User's Guide", "https://docs.oracle.com/en/engineered-systems/exadata-database-machine/sagug/index.html"]], body:[
+ ["code","bash","# celladmin 또는 root, 셀에서 (dcli로 전체 셀에 한 번에 돌려도 됨)\ncellcli -e \"list cell attributes name, flashCacheMode\"\ncellcli -e \"list flashcache detail\"        # 크기·상태\ncellcli -e \"list flashlog detail\"          # Exadata Smart Flash Log (Redo 쓰기 가속)\ncellcli -e \"list iormplan detail\"          # IORM 목표(objective)와 DB별 계획\n\n# 전체 셀 한 번에\ndcli -g ~/cell_group -l celladmin \"cellcli -e list cell attributes name, flashCacheMode\""],
+ ["tbl",[["Flash Cache 모드","뜻"],["WriteThrough","읽기만 캐시, 쓰기는 디스크에 바로"],["WriteBack","쓰기도 플래시에 먼저 받아 두고 나중에 디스크로 — 쓰기 많은 업무에 유리"]]],
+ ["ul",["Smart Flash Log는 Redo 쓰기를 플래시와 디스크에 동시에 보내 먼저 끝나는 쪽으로 응답해 'log file parallel write' 튀는 현상을 줄입니다.","IORM은 여러 DB가 같은 셀을 쓸 때 I/O를 나눠 주는 기능입니다. 통합 환경에서 한 DB의 배치가 다른 DB를 느리게 하면 IORM 계획부터 확인합니다."]],
+ ["warn","Flash Cache 모드 변경은 셀별 절차(롤링 여부 포함)가 Exadata 버전마다 다릅니다. 반드시 해당 버전 문서 절차를 따르세요."]
+]}],
+ quiz: [
+ { q: "EXAchk가 포함된 오라클 진단 도구 모음은?", o: ["OEM", "AHF", "OPatch", "DBCA"], a: 1, e: "EXAchk·ORAchk·TFA·OSWatcher는 Autonomous Health Framework(AHF)에 포함됩니다." },
+ { q: "셀의 Flash Cache 모드를 확인하는 CellCLI 명령은?", o: ["list cell attributes name, flashCacheMode", "list griddisk", "list alerthistory", "list lun"], a: 0, e: "cell 객체의 flashCacheMode 속성으로 WriteBack/WriteThrough를 확인합니다." },
+ { q: "Exadata Smart Flash Log가 줄여 주는 대기는?", o: ["db file scattered read", "log file parallel write 지연 튐", "enq: TX", "gc cr request"], a: 1, e: "Redo 쓰기를 플래시와 디스크에 동시에 보내 먼저 끝나는 쪽으로 응답해 Redo 쓰기 지연 튐을 줄입니다." }
+]},
+/* ───── 12호선 장애대응 ───── */
+trouble: { lessons: [
+{ id:"tr-7", title:"세션·프로세스 한도 초과 (ORA-00018·00020)", min:4, ref:[["Database Reference 19c · SESSIONS", D + "refrn/SESSIONS.html"], ["Database Reference 19c · PROCESSES", D + "refrn/PROCESSES.html"]], body:[
+ ["tbl",[["에러","뜻"],["ORA-00020","maximum number of processes exceeded — PROCESSES 한도"],["ORA-00018","maximum number of sessions exceeded — SESSIONS 한도"]]],
+ ["code","sql","-- 현재·최대 사용량과 한도\nSELECT resource_name, current_utilization, max_utilization, limit_value\nFROM   v$resource_limit WHERE resource_name IN ('processes','sessions');\n\n-- 어디서 몰려왔나\nSELECT machine, program, username, status, COUNT(*)\nFROM   v$session WHERE type = 'USER'\nGROUP  BY machine, program, username, status ORDER BY 5 DESC;"],
+ ["ul",["PROCESSES는 정적 파라미터라 바꾸려면 재기동이 필요합니다. SESSIONS 기본값은 (1.5 × PROCESSES) + 22로 계산됩니다.","갑자기 한도에 닿았다면 대부분 애플리케이션 커넥션 풀 설정 변경, 커넥션 누수, 장애 후 재접속 폭주입니다. 한도를 올리기 전에 원인부터 확인합니다.","INACTIVE 세션이 대부분이면 풀의 최대 연결 수가 과한 경우입니다."]],
+ ["tip","PROCESSES를 크게 올리면 PGA_AGGREGATE_LIMIT 기본값(PROCESSES × 3MB 이상)과 OS 세마포어·프로세스 한도도 함께 커져야 합니다. 변경 전 OS limits(nproc)도 같이 확인하세요."]
+]},
+{ id:"tr-8", title:"데드락 ORA-00060 트레이스 읽기", min:5, ref:[["MOS 60.1 · Troubleshooting ORA-60 Errors", MOS + "60.1"]], body:[
+ ["p","두 세션이 서로 상대가 가진 잠금을 기다리면 오라클이 몇 초 안에 감지해 한쪽 '문장'을 롤백하고 ORA-00060을 냅니다. 트랜잭션 전체가 아니라 그 문장만 취소되므로, 애플리케이션이 이어서 커밋·롤백을 결정해야 합니다."],
+ ["code","bash","# alert 로그에 트레이스 파일 이름이 남음\ngrep -n 'ORA-00060' $ORACLE_BASE/diag/rdbms/dbbig/DBBIG1/trace/alert_DBBIG1.log | tail -5\n# 그 트레이스에서 'Deadlock graph' 부분을 봄\ngrep -n -A 15 'Deadlock graph' <트레이스 파일>"],
+ ["tbl",[["Deadlock graph 모양","흔한 원인"],["TX 잠금, 양쪽 모두 X 모드 대기","애플리케이션이 같은 행들을 서로 다른 순서로 수정 (로직 문제)"],["TM 잠금이 관련","인덱스 없는 외래 키(FK) — 부모 행 삭제·수정 시 자식 테이블 잠금"],["TX 잠금, S 모드 대기","블록의 ITL 부족, 비트맵 인덱스 동시 DML 등"]]],
+ ["code","sql","-- 인덱스 없는 외래 키 찾기 (단일 컬럼 FK 기준 간단 버전)\nSELECT c.owner, c.table_name, cc.column_name, c.constraint_name\nFROM   dba_constraints c JOIN dba_cons_columns cc\n       ON cc.owner = c.owner AND cc.constraint_name = c.constraint_name\nWHERE  c.constraint_type = 'R' AND c.owner = 'APP'\nAND NOT EXISTS (SELECT 1 FROM dba_ind_columns ic\n                WHERE ic.table_owner = c.owner AND ic.table_name = c.table_name\n                AND ic.column_name = cc.column_name AND ic.column_position = 1);"],
+ ["tip","데드락은 DB가 스스로 풀어 주므로 'DB 장애'가 아니라 대부분 애플리케이션 로직 문제입니다. 트레이스의 두 SQL과 대상 행(rowid)을 정리해 개발팀에 전달하는 것이 DBA의 몫입니다."]
+]},
+{ id:"tr-9", title:"RAC 노드 재부팅 후 점검 순서", min:5, ref:[["Clusterware Administration 19c", D + "cwadd/index.html"]], body:[
+ ["p","◎ 재부팅된 노드에서 시작해, 살아 있던 노드와 비교합니다."],
+ ["code","bash","# STEP 1. 언제, 왜 재부팅됐나 (root)\nlast -x reboot | head -5\ngrep -iE 'panic|watchdog|oom|reboot' /var/log/messages | tail -50\n\n# STEP 2. 클러스터가 정상 합류했나\n/u01/app/19.0.0/grid/bin/crsctl check cluster -all\n/u01/app/19.0.0/grid/bin/crsctl stat res -t\n\n# STEP 3. 재부팅 직전 CRS 기록 (grid)\ngrep -E 'CRS-16(06|07|10|11|12)' $ORACLE_BASE/diag/crs/$(hostname -s)/crs/trace/alert.log | tail -20\n\n# STEP 4. 진단 자료 수집 (장애 시각 전후)\ntfactl diagcollect -last 4h"],
+ ["ul",["DB 인스턴스·서비스가 원래 노드로 돌아왔는지(srvctl status service) 확인합니다. 자동 복귀(-failback) 설정이 없으면 수동 relocate가 필요합니다.","DB alert 로그에서 살아 있던 노드가 죽은 인스턴스의 복구를 정상적으로 끝냈는지, 재부팅된 노드의 인스턴스가 에러 없이 OPEN됐는지 확인합니다.","OSWatcher의 재부팅 직전 몇 분(CPU·메모리·스왑)이 원인 판단의 핵심 증거입니다."]],
+ ["tip","고객 보고는 '시각 → 현상 → 영향(서비스 중단 시간) → 원인(1차 판단) → 조치 → 재발 방지(SR 번호)' 순서로 쓰면 깔끔합니다."]
+]}],
+ quiz: [
+ { q: "19c에서 SESSIONS 파라미터의 기본값 계산식은?", o: ["PROCESSES + 5", "(1.1 × PROCESSES) + 5", "(1.5 × PROCESSES) + 22", "PROCESSES × 2"], a: 2, e: "19c Reference 기준 기본값은 (1.5 × PROCESSES) + 22입니다." },
+ { q: "PROCESSES·SESSIONS의 현재·최대 사용량과 한도를 한 번에 보는 뷰는?", o: ["V$RESOURCE_LIMIT", "V$SGASTAT", "V$LICENSE", "V$SYSMETRIC"], a: 0, e: "V$RESOURCE_LIMIT의 CURRENT_UTILIZATION, MAX_UTILIZATION, LIMIT_VALUE를 봅니다." },
+ { q: "ORA-00060 발생 시 오라클이 롤백하는 범위는?", o: ["두 트랜잭션 전체", "한쪽 세션의 해당 문장(statement)", "인스턴스 전체", "아무것도 롤백하지 않음"], a: 1, e: "데드락을 감지하면 한쪽의 문장만 롤백합니다. 트랜잭션의 나머지 처리는 애플리케이션이 결정합니다." },
+ { q: "Deadlock graph에 TM 잠금이 보일 때 의심할 대표 원인은?", o: ["인덱스 없는 외래 키", "TEMP 부족", "Redo 부족", "리스너 오류"], a: 0, e: "자식 테이블 FK 컬럼에 인덱스가 없으면 부모 행 변경 시 자식 테이블 TM 잠금이 걸려 데드락이 잘 생깁니다." }
+]},
+/* ───── 13호선 업그레이드·이관 ───── */
+mig: { lessons: [
+{ id:"mig-7", title:"non-CDB를 PDB로 전환", min:6, ref:[["Multitenant Administrator's Guide 19c · Creating a PDB Using a Non-CDB", D + "multi/index.html"]], body:[
+ ["p","같은 버전·같은 RU의 non-CDB를 CDB 안의 PDB로 넣는 방법입니다. 버전이 다르면 먼저 업그레이드하거나 AutoUpgrade의 target_cdb로 업그레이드와 전환을 한 번에 합니다."],
+ ["code","sql","-- ◎ non-CDB에서: 읽기 전용으로 열고 XML 생성\nSHUTDOWN IMMEDIATE;\nSTARTUP OPEN READ ONLY;\nEXEC DBMS_PDB.DESCRIBE(pdb_descr_file => '/home/oracle/ncdb.xml');\nSHUTDOWN IMMEDIATE;\n\n-- ◎ CDB 루트에서: 호환성 점검\nSET SERVEROUTPUT ON\nDECLARE ok BOOLEAN;\nBEGIN\n  ok := DBMS_PDB.CHECK_PLUG_COMPATIBILITY(pdb_descr_file => '/home/oracle/ncdb.xml', pdb_name => 'APPPDB');\n  DBMS_OUTPUT.PUT_LINE(CASE WHEN ok THEN 'COMPATIBLE' ELSE 'CHECK PDB_PLUG_IN_VIOLATIONS' END);\nEND;\n/\nSELECT type, message, status FROM pdb_plug_in_violations WHERE name = 'APPPDB' AND status <> 'RESOLVED';\n\n-- 플러그인 (NOCOPY = 원본 파일을 그대로 사용)\nCREATE PLUGGABLE DATABASE apppdb USING '/home/oracle/ncdb.xml' NOCOPY TEMPFILE REUSE;\n\n-- non-CDB 딕셔너리를 PDB 구조로 정리 (필수, 시간 걸림)\nALTER SESSION SET CONTAINER = apppdb;\n@?/rdbms/admin/noncdb_to_pdb.sql\n\nALTER PLUGGABLE DATABASE apppdb OPEN;\nALTER PLUGGABLE DATABASE apppdb SAVE STATE;"],
+ ["warn","NOCOPY는 원본 데이터파일을 PDB가 그대로 가져가므로, 이후 원래 non-CDB로 되돌아갈 수 없습니다. 실행 전에 반드시 백업(또는 COPY 방식)을 준비하세요."],
+ ["tip","애플리케이션은 이제 PDB 서비스명으로 접속해야 합니다. 기존 접속 문자열(SID 방식)을 쓰는 애플리케이션 목록을 미리 뽑아 두면 전환 당일 접속 장애를 막을 수 있습니다."]
+]},
+{ id:"mig-8", title:"타임존 파일(DST) 업그레이드", min:4, ref:[["Database Upgrade Guide 19c · Upgrading the Time Zone File Version", D + "upgrd/index.html"]], body:[
+ ["p","DB는 시간대 규칙을 '타임존 파일(DST 버전)'로 가지고 있습니다. TIMESTAMP WITH TIME ZONE 데이터를 정확히 계산하려면 업그레이드 후 새 홈의 타임존 버전으로 올려야 합니다. AutoUpgrade는 필요하면 기본적으로 이 작업도 해 줍니다."],
+ ["code","sql","-- 현재 DB의 타임존 버전\nSELECT * FROM v$timezone_file;\nSELECT property_name, property_value FROM database_properties WHERE property_name LIKE 'DST_%';"],
+ ["code","bash","# 수동으로 할 때 (18c+ 제공 스크립트) — DB 재기동이 포함되므로 다운타임 필요\nsqlplus / as sysdba @?/rdbms/admin/utltz_upg_check.sql\nsqlplus / as sysdba @?/rdbms/admin/utltz_upg_apply.sql"],
+ ["ul",["CDB는 루트와 각 PDB에서 따로 실행합니다.","Data Guard는 Primary에서만 실행하면 Redo로 반영되지만, Standby 홈에도 같은 버전의 타임존 파일(같은 RU)이 있어야 합니다.","TIMESTAMP WITH TIME ZONE 컬럼이 많은 큰 테이블이 있으면 시간이 오래 걸릴 수 있어 check 결과로 미리 가늠합니다."]],
+ ["tip","업그레이드 작업계획서의 '사후 작업'에 타임존 업그레이드를 넣었는지, AutoUpgrade에 맡겼는지(timezone_upg) 명확히 적어 두세요."]
+]}],
+ quiz: [
+ { q: "non-CDB를 PDB로 넣기 전에 XML 설명 파일을 만드는 프로시저는?", o: ["DBMS_PDB.DESCRIBE", "DBMS_PDB.SYNC_PDB", "DBMS_STATS.EXPORT", "DBMS_METADATA.GET_DDL"], a: 0, e: "읽기 전용으로 연 non-CDB에서 DBMS_PDB.DESCRIBE로 XML을 만듭니다." },
+ { q: "non-CDB를 PDB로 플러그인한 뒤 반드시 실행해야 하는 스크립트는?", o: ["utlrp.sql", "noncdb_to_pdb.sql", "catcon.pl만", "utlpwdmg.sql"], a: 1, e: "noncdb_to_pdb.sql로 딕셔너리를 PDB 구조로 정리해야 정상 사용이 가능합니다." },
+ { q: "AutoUpgrade와 타임존 파일 업그레이드의 관계로 옳은 것은?", o: ["절대 하지 않는다", "필요하면 기본적으로 수행한다", "Standard Edition에서만 한다", "수동 스크립트가 필수다"], a: 1, e: "19c 문서상 AutoUpgrade는 타임존 업데이트가 필요하면 기본적으로 수행합니다(timezone_upg로 제어)." },
+ { q: "AutoUpgrade에서 raise_compatible=yes로 설정할 때 함께 설정해야 하는 것은?", o: ["drop_grp_after_upgrade=yes", "timezone_upg=no", "restoration=no", "target_cdb"], a: 0, e: "COMPATIBLE을 올리면 GRP로 되돌릴 수 없으므로 drop_grp_after_upgrade=yes가 함께 필요합니다." }
+]}
+  };
+  Object.keys(ADD).forEach(function (id) {
+    var c = cat(id); if (!c) return;
+    ADD[id].lessons.forEach(function (l) { c.lessons.push(l); });
+    c.quiz = c.quiz.concat(ADD[id].quiz);
+  });
+})();
