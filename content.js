@@ -1695,13 +1695,13 @@ exa: { lessons: [
  ["warn","asmdeactivationoutcome에 'Yes'가 아닌 값(예: 다른 셀의 미러가 OFFLINE이라 데이터를 잃을 수 있다는 메시지)이 하나라도 있으면 절대 진행하지 마세요. 다음 셀은 이전 셀의 모든 그리드 디스크가 ONLINE이 된 뒤에 진행합니다."],
  ["tip","ASM 쪽에서도 같은 상황을 볼 수 있습니다: V$ASM_DISK의 MODE_STATUS, V$ASM_OPERATION의 RESYNC. 셀 작업이 길어질 것 같으면 디스크그룹의 disk_repair_time·failgroup_repair_time을 확인하세요(ASM 노선 참고)."]
 ]},
-{ id:"exa-8", title:"Storage Index와 HCC 이해", min:5, ref:[["Exadata System Software User's Guide · Features", EXA + "sagug/index.html"]], body:[
+{ id:"exa-8", title:"Storage Index와 HCC 이해", min:5, ref:[["Exadata System Software User's Guide · Features", EXA + "sagug/index.html"], ["Database Concepts 19c · Tables and Table Clusters (DML and Hybrid Columnar Compression)", "https://docs.oracle.com/en/database/oracle/oracle-database/19/cncpt/tables-and-table-clusters.html"]], body:[
  ["p","**Storage Index**는 셀 메모리에 '이 구역(region)의 컬럼 최솟값·최댓값'을 자동으로 기억해, 조건에 맞을 수 없는 구역은 아예 읽지 않게 합니다. 만들거나 관리할 필요가 없습니다."],
  ["code","sql","-- Storage Index로 아낀 I/O (누적)\nSELECT name, ROUND(value/1024/1024/1024,1) gb FROM v$sysstat\nWHERE  name IN ('cell physical IO bytes saved by storage index',\n                'cell physical IO bytes eligible for predicate offload',\n                'cell physical IO interconnect bytes returned by smart scan');"],
  ["p","**HCC(Hybrid Columnar Compression)**는 행들을 묶어 컬럼별로 압축하는 Exadata(및 오라클 스토리지) 전용 압축입니다. 이력·적재 후 조회만 하는 데이터에 압축률이 매우 높습니다."],
  ["tbl",[["HCC 종류","용도"],["QUERY LOW / QUERY HIGH","자주 조회하는 데이터 (쿼리 성능과 압축 균형)"],["ARCHIVE LOW / ARCHIVE HIGH","거의 안 보는 보관 데이터 (최대 압축)"]]],
  ["code","sql","-- 오래된 파티션을 HCC로 압축 (direct-path로 다시 씀)\nALTER TABLE app.orders_hist MOVE PARTITION p202409 COLUMN STORE COMPRESS FOR QUERY HIGH UPDATE INDEXES;\nSELECT partition_name, compression, compress_for FROM dba_tab_partitions\nWHERE  table_owner = 'APP' AND table_name = 'ORDERS_HIST';"],
- ["warn","HCC 데이터는 direct-path 적재(INSERT /*+ APPEND */, MOVE 등)로 들어올 때만 압축됩니다. 이후 일반 UPDATE된 행은 HCC 압축이 풀린 형태로 바뀌어 압축률이 떨어지니, 자주 갱신되는 데이터에는 맞지 않습니다."]
+ ["warn","HCC는 기본적으로 direct-path 적재(INSERT /*+ APPEND */, MOVE, CTAS 등)로 압축됩니다. 12.2부터는 APPEND 없는 INSERT … SELECT와 PL/SQL·OCI 배열 삽입도 HCC로 압축될 수 있습니다(ASSM 테이블스페이스, COMPATIBLE 12.2 이상). 이후 일반 UPDATE된 행은 HCC 압축이 풀린 형태로 바뀌어 압축률이 떨어지니, 자주 갱신되는 데이터에는 맞지 않습니다."]
 ]},
 { id:"exa-9", title:"ILOM으로 하드웨어 장애 확인", min:4, ref:[["Oracle ILOM Documentation", "https://docs.oracle.com/en/servers/management/ilom/index.html"]], body:[
  ["code","bash","# ILOM에 ssh 접속 후 (DB 서버·셀 공통)\nshow /SP/faultmgmt                 # 장애가 기록된 부품 목록\nstart /SP/faultmgmt/shell          # 장애 관리 셸 진입\nfaultmgmtsp> fmadm faulty          # 진단 내용·부품·권고 조치\nfaultmgmtsp> exit\n\n# 호스트 OS에서 (root)\nipmitool sel list | tail -20       # 시스템 이벤트 로그\nipmitool sensor | grep -iv ' ok '  # 정상 아닌 센서"],
@@ -1717,7 +1717,7 @@ exa: { lessons: [
  { q: "Exadata 셀을 내리기 전에 반드시 'Yes'인지 확인할 그리드 디스크 속성은?", o: ["asmmodestatus", "asmdeactivationoutcome", "status", "cachingPolicy"], a: 1, e: "asmdeactivationoutcome이 Yes여야 그 셀을 내려도 다른 셀의 미러로 데이터가 보호됩니다." },
  { q: "셀 작업 후 그리드 디스크를 다시 활성화했을 때 asmmodestatus의 흐름은?", o: ["ONLINE → OFFLINE", "SYNCING → ONLINE", "DROPPED → ONLINE", "UNUSED → ONLINE"], a: 1, e: "OFFLINE 동안의 변경을 Resync하는 동안 SYNCING이고, 끝나면 ONLINE이 됩니다." },
  { q: "Storage Index에 대한 설명으로 옳은 것은?", o: ["DBA가 CREATE로 만든다", "셀 메모리에 구역별 최솟값·최댓값을 자동으로 기억해 불필요한 I/O를 건너뛴다", "B-tree 인덱스의 일종", "디스크에 저장되는 영구 인덱스"], a: 1, e: "자동으로 만들어지고 관리할 필요가 없습니다. 효과는 'cell physical IO bytes saved by storage index' 통계로 봅니다." },
- { q: "HCC 압축이 적용되는 적재 방식은?", o: ["일반 INSERT", "direct-path 적재 (APPEND, MOVE, CTAS 등)", "UPDATE", "MERGE만"], a: 1, e: "HCC는 direct-path로 들어온 데이터에 적용되고, 이후 갱신된 행은 압축률이 떨어집니다." },
+ { q: "HCC 압축이 적용되는 적재 방식은?", o: ["한 건씩 하는 일반 INSERT", "direct-path 적재 (APPEND, MOVE, CTAS 등)", "UPDATE", "MERGE만"], a: 1, e: "HCC의 기본 적재 경로는 direct-path입니다(12.2부터는 APPEND 없는 INSERT … SELECT·배열 삽입도 지원). 이후 갱신된 행은 압축률이 떨어집니다." },
  { q: "ILOM에서 진단된 하드웨어 장애 상세를 보는 명령은?", o: ["show /SP/network", "fmadm faulty (faultmgmt 셸)", "cellcli -e list cell", "ipmitool lan print"], a: 1, e: "start /SP/faultmgmt/shell로 들어가 fmadm faulty를 실행하면 UUID·부품·권고 조치가 나옵니다." },
  { q: "X8M 이후 Exadata에서 DB 서버와 셀 사이 내부 네트워크 기술은?", o: ["InfiniBand", "RoCE", "Fibre Channel", "iSCSI"], a: 1, e: "X8M부터 RDMA over Converged Ethernet(RoCE)을 쓰고, 이전 세대는 InfiniBand였습니다." }
 ]},
@@ -1966,7 +1966,7 @@ space: { lessons: [
  { q: "Flashback Version Query의 VERSIONS_OPERATION 값 'D'의 의미는?", o: ["DDL", "DELETE", "DEFAULT", "DUPLICATE"], a: 1, e: "I=입력, U=수정, D=삭제입니다. D 행은 삭제되기 직전의 값을 보여줍니다." },
  { q: "AS OF TIMESTAMP로 조회할 때 정확한 지점을 원하면 SCN을 쓰라는 이유는?", o: ["시각 지정은 지원되지 않아서", "시각→SCN 변환 때문에 최대 3초 이른 시점이 조회될 수 있어서", "SCN이 더 빨라서", "RAC에서만 필요해서"], a: 1, e: "매뉴얼: 시각으로 지정하면 실제 조회 시점이 최대 3초 앞설 수 있습니다." },
  { q: "어떤 작업 이전 시점은 Flashback Query로 볼 수 없나(ORA-01466)?", o: ["INSERT", "테이블 MOVE·TRUNCATE·컬럼 삭제 같은 구조 변경 DDL", "COMMIT", "통계 수집"], a: 1, e: "구조를 바꾸는 DDL은 그 테이블의 기존 Undo를 무효화합니다. PCTFREE 같은 저장 속성 변경은 해당하지 않습니다." },
- { q: "ONLINE 없이 ALTER TABLE … MOVE를 하면 인덱스는?", o: ["그대로 VALID", "ROWID가 바뀌어 UNUSABLE이 된다", "자동 삭제된다", "INVISIBLE이 된다"], a: 1, e: "UNUSABLE이 되어 그 인덱스를 쓰는 DML이 ORA-01502를 받습니다. 재빌드가 필요합니다." },
+ { q: "ONLINE 없이 ALTER TABLE … MOVE를 하면 인덱스는?", o: ["그대로 VALID", "ROWID가 바뀌어 UNUSABLE이 된다", "자동 삭제된다", "INVISIBLE이 된다"], a: 1, e: "UNUSABLE이 됩니다. UNIQUE(PK) 인덱스면 DML이 ORA-01502로 실패하고, 일반 인덱스는 옵티마이저가 못 써서 조회가 느려집니다. 재빌드가 필요합니다." },
  { q: "19c EE에서 ALTER TABLE … MOVE ONLINE의 라이선스는?", o: ["Advanced Compression 필요", "Partitioning 필요", "EE에 포함", "Diagnostics Pack 필요"], a: 2, e: "라이선스 문서상 온라인 테이블 이동은 EE에 포함됩니다(압축 형식으로의 온라인 파티션 이동은 Advanced Compression)." }
 ]},
 /* ───── 3호선 백업·복구 ───── */

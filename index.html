@@ -162,6 +162,20 @@ pre.code .cm{color:#6F7A8B} pre.code .kw{color:#FF9B73} pre.code .st{color:#9DD9
 .prog{display:flex;gap:4px;margin:4px 0 14px}
 .prog i{flex:1;height:4px;border-radius:2px;background:var(--line)}
 .prog i.ok{background:var(--ok)} .prog i.bad{background:var(--bad)} .prog i.cur{background:var(--tx2)}
+.prog i.peek{background:var(--warn)} .prog i.skip{background:var(--tx3);opacity:.35}
+.qtools{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
+.qtools .btn{padding:0 4px;font-size:13px}
+.qtools .btn.on{border-color:var(--warn);color:var(--warn)}
+.qhint{margin-top:12px;padding:11px 13px;border-radius:12px;background:var(--warnbg);border:1px solid rgba(245,184,61,.3);font-size:14px;line-height:1.6}
+.qhint b{color:var(--warn)}
+.expl b.warn{color:var(--warn)}
+details.qx{margin-top:10px} details.qx .in{font-size:14px;line-height:1.65}
+.qx p,.qxn p{margin:0 0 7px} .qx p:last-child,.qxn p:last-child{margin-bottom:0}
+.qxn{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);line-height:1.6}
+.qx p.xo,.qxn p.xo{border-left:3px solid var(--ok);padding-left:9px}
+.qx p.xx,.qxn p.xx{color:var(--tx2)}
+.qx p.xp,.qxn p.xp{background:var(--card2);padding:8px 10px;border-radius:9px;overflow-wrap:anywhere}
+.qx code,.qxn code,.qhint code{font-family:var(--mono);font-size:.9em;background:var(--card2);padding:1px 5px;border-radius:5px}
 .score{font:700 54px/1 var(--mono);letter-spacing:-2px}
 /* SQL */
 .pq{font-size:15px;line-height:1.65}
@@ -247,6 +261,7 @@ details.fold .in{padding:0 14px 12px}
 <script src="engine.js"></script>
 <script src="schema.js"></script>
 <script src="glossary.js"></script>
+<script src="quizhelp.js"></script>
 <script src="app.js"></script>
 <script>
 if ("serviceWorker" in navigator) { window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); }); }
